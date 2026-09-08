@@ -70,6 +70,7 @@ def _infer_quantization(config: dict[str, Any]) -> str | None:
     if load8 or bits == 8:
         return f"{method or 'quantized'}-int8"
 
+    # compressed-tensors / modelopt configs often describe bit-width inside groups.
     groups = q.get("config_groups")
     if isinstance(groups, dict):
         seen_bits: set[int] = set()
@@ -114,7 +115,12 @@ def _extract_hf_param_count(info: Any) -> int | None:
 
 
 def _extract_checkpoint_size_bytes(info: Any) -> int | None:
-    """Sum actual safetensors shard bytes when the Hub returns file metadata."""
+    """Sum actual safetensors shard bytes when the Hub returns file metadata.
+
+    This is especially useful for native FP8/NVFP4 checkpoints where a generic
+    bytes-per-parameter rule is misleading because some modules remain at higher
+    precision and scale metadata is stored alongside packed weights.
+    """
     siblings = getattr(info, "siblings", None)
     if not siblings:
         return None
@@ -203,6 +209,8 @@ def _qwen35_cache_metadata(text: dict[str, Any]) -> tuple[int, int, int, str]:
         full_layers = layers // interval
         linear_layers = layers - full_layers
 
+    # Qwen3.5/3.8 GatedDeltaNet state, following the public Transformers implementation:
+    # recurrent state: [B, num_v_heads, key_head_dim, value_head_dim], FP32.
     num_v = _first_int(text, "linear_num_value_heads")
     kdim = _first_int(text, "linear_key_head_dim")
     vdim = _first_int(text, "linear_value_head_dim")
@@ -211,10 +219,11 @@ def _qwen35_cache_metadata(text: dict[str, Any]) -> tuple[int, int, int, str]:
     if not all([num_v, kdim, vdim, num_k, conv_kernel]):
         raise ModelInspectionError("Qwen3.5 hybrid config is missing linear-attention state dimensions.")
 
-    recurrent_bytes_per_layer = num_v * kdim * vdim * 4
+    recurrent_bytes_per_layer = num_v * kdim * vdim * 4  # recurrent path is FP32
     key_dim = num_k * kdim
     value_dim = num_v * vdim
     conv_dim = 2 * key_dim + value_dim
+    # causal-conv cache follows the model activation dtype; BF16/FP16 is the common deployment path.
     conv_bytes_per_layer = conv_dim * conv_kernel * 2
     state_bytes_per_batch = linear_layers * (recurrent_bytes_per_layer + conv_bytes_per_layer)
     label = f"GatedDeltaNet state ({linear_layers} linear-attn layers)"
@@ -251,6 +260,20 @@ def _deepseek_v4_cache_metadata(config: dict[str, Any]) -> dict[str, Any]:
         "index_head_dim": index_head_dim,
         "fp8_scale_bytes_per_entry": 8,
         "fp4_indexer_scale_bytes_per_entry": 4,
+    }
+
+
+def _kimi_mla_cache_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    layers = _first_int(config, "num_hidden_layers")
+    kv_lora_rank = _first_int(config, "kv_lora_rank")
+    rope_dim = _first_int(config, "qk_rope_head_dim")
+    if not all([layers, kv_lora_rank, rope_dim]):
+        raise ModelInspectionError("Kimi K2.x config is missing MLA latent-cache dimensions.")
+    return {
+        "mla_latent_dim": kv_lora_rank + rope_dim,
+        "kv_lora_rank": kv_lora_rank,
+        "rope_head_dim": rope_dim,
+        "fp8_scale_bytes_per_entry": 16,
     }
 
 
@@ -301,6 +324,11 @@ def inspect_model(model_ref: str, revision: str | None = None) -> ModelSpec:
     q_heads = _first_int(config, "num_attention_heads", "n_head")
     kv_heads = _first_int(config, "num_key_value_heads", "num_kv_heads") or q_heads
     head_dim = _first_int(config, "head_dim", "qk_head_dim")
+    if head_dim is None and model_type == "kimi_k2":
+        nope = _first_int(config, "qk_nope_head_dim")
+        rope = _first_int(config, "qk_rope_head_dim")
+        if nope and rope:
+            head_dim = nope + rope
     if head_dim is None and hidden and q_heads:
         head_dim = hidden // q_heads
 
@@ -389,6 +417,25 @@ def inspect_model(model_ref: str, revision: str | None = None) -> ModelSpec:
             f"GLM DSA/IndexShare cache detected: {cache_metadata['mla_latent_dim']}-dim MLA latent per layer + "
             f"{cache_metadata['indexer_full_layers']} materialized indexer caches shared across the remaining layers."
         )
+    elif root_model_type == "kimi_k25" or model_type == "kimi_k2":
+        cache_kind = "kimi_mla"
+        cache_metadata = _kimi_mla_cache_metadata(config)
+        kv_layers = 0
+        warnings.append(
+            f"Kimi K2.x MLA cache detected: {cache_metadata['mla_latent_dim']}-dim compressed latent per layer. "
+            "Pure tensor parallelism replicates MLA cache; vLLM DCP can sequence-shard it."
+        )
+    elif model_type == "minimax_m2":
+        cache_kind = "minimax_m2"
+        cache_metadata = {
+            "mtp_modules": _first_int(config, "num_mtp_modules") or 0,
+            "official_single_sequence_limit": 196608,
+        }
+        if max_context and max_context > 196608:
+            warnings.append(
+                "MiniMax-M2.7 config advertises a slightly larger positional limit, while the official deployment guide "
+                "states a 196K single-sequence serving limit. VRAMScout reports both rather than silently overriding config.json."
+            )
 
     dtype_value = config.get("dtype", config.get("torch_dtype", root_config.get("dtype", root_config.get("torch_dtype"))))
     has_vision = isinstance(root_config.get("vision_config"), dict) and not bool(root_config.get("language_model_only", False))
