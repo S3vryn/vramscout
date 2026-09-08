@@ -32,6 +32,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--kv-dtype", choices=["auto", "fp32", "fp16", "bf16", "fp8"], default="auto", help="KV/cache precision")
     p.add_argument("--indexer-dtype", choices=["auto", "bf16", "fp16", "fp8", "fp4"], default="auto", help="Sparse-indexer cache precision for architectures that use one")
     p.add_argument("--tp", type=_positive_int, default=1, help="Tensor-parallel GPU count (default: 1)")
+    p.add_argument("--engine", choices=["generic", "vllm"], default="generic", help="Deployment memory policy (default: generic)")
+    p.add_argument("--gpu-memory-utilization", type=float, default=None, help="vLLM per-instance memory fraction (current vLLM default: 0.92)")
     p.add_argument("--dcp", type=_positive_int, default=1, help="Decode Context Parallel size for MLA cache sharding (default: 1)")
     p.add_argument("--prefill-chunk", type=_positive_int, default=8192, help="Active prefill tokens used for scratch estimate (default: 8192)")
     p.add_argument("--gpu-index", type=int, default=0, help="First NVIDIA GPU index for local TP group (default: 0)")
@@ -51,6 +53,10 @@ def _print_human(result) -> None:
     gpu.add_column("Value", justify="right")
     gpu.add_row("Device / group", f"GPU {result.gpu.index} · {result.gpu.name}")
     gpu.add_row("TP / DCP", f"{result.tp_size} / {result.dcp_size}")
+    gpu.add_row("Engine", result.engine)
+    if result.gpu_memory_utilization is not None:
+        gpu.add_row("GPU memory utilization", f"{result.gpu_memory_utilization:.3f}")
+    gpu.add_row("Planning budget / rank", f"{result.memory_budget_gib:.2f} GiB")
     gpu.add_row("Per-GPU total VRAM", f"{result.gpu.total_gib:.2f} GiB")
     gpu.add_row("Limiting used", f"{result.gpu.used_gib:.2f} GiB")
     gpu.add_row("Limiting free", f"{result.gpu.free_gib:.2f} GiB")
@@ -159,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
             prefill_chunk_tokens=args.prefill_chunk,
             tp_size=args.tp,
             dcp_size=args.dcp,
+            engine=args.engine,
+            gpu_memory_utilization=args.gpu_memory_utilization,
         )
     except (GPUDetectionError, ModelInspectionError, ValueError) as exc:
         if args.json:
