@@ -1,0 +1,27 @@
+{
+  "model": "moonshotai/Kimi-K2.5",
+  "architecture": {
+    "layers": 61,
+    "kv_lora_rank": 512,
+    "qk_rope_head_dim": 64,
+    "mla_latent_dim": 576,
+    "max_context": 262144
+  },
+  "cache_validation": {
+    "serving": "vLLM 0.18.1rc1.dev213, FLASHINFER_MLA",
+    "tensor_parallel_size": 8,
+    "decode_context_parallel_size": 1,
+    "kv_dtype": "bf16/auto",
+    "public_available_cache_gib_per_gpu": 163.59,
+    "public_gpu_cache_tokens": 2499584,
+    "public_effective_bytes_per_logical_token": 70273.06343301926,
+    "predicted_bytes_per_logical_token": 70272,
+    "absolute_error_percent": 0.0015132868375217232,
+    "public_model_loading_gib_per_gpu": 72.14,
+    "source": "https://github.com/MoonshotAI/Kimi-K2.5/issues/34"
+  },
+  "notes": [
+    "The public vLLM run uses TP=8 and DCP=1. MLA cache is replicated across pure TP ranks, so the per-GPU cache slope remains 61 * (512 + 64) * 2 bytes/token.",
+    "The model-loading value is recorded as engine evidence but is not treated as a pure checkpoint-byte target because vLLM loaded residency includes rank-local packing/buffers."
+  ]
+}
