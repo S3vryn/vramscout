@@ -89,6 +89,11 @@ class PlanResult:
     warnings: list[str] = field(default_factory=list)
     tp_size: int = 1
     dcp_size: int = 1
+    engine: str = "generic"
+    memory_budget_gib: float = 0.0
+    gpu_memory_utilization: float | None = None
+    engine_startup_ok: bool = True
+    outside_engine_headroom_gib: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

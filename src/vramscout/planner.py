@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .engine import resolve_engine_budget
 from .memory import (
     DEFAULT_PREFILL_CHUNK_TOKENS,
     breakdown_for_context,
@@ -25,6 +26,7 @@ def _validate_parallelism(model: ModelSpec, tp_size: int, dcp_size: int) -> None
 
 def _memory_fits(
     gpu: GPUInfo,
+    memory_budget_gib: float,
     model: ModelSpec,
     context: int,
     batch_size: int,
@@ -49,11 +51,12 @@ def _memory_fits(
         tp_size=tp_size,
         dcp_size=dcp_size,
     )
-    return b.total_gib <= gpu.free_gib
+    return b.total_gib <= memory_budget_gib
 
 
 def _max_context_by_vram(
     gpu: GPUInfo,
+    memory_budget_gib: float,
     model: ModelSpec,
     batch_size: int,
     weight_dtype: str,
@@ -65,24 +68,24 @@ def _max_context_by_vram(
     dcp_size: int,
 ) -> int:
     if not _memory_fits(
-        gpu, model, 1, batch_size, weight_dtype, kv_dtype, indexer_dtype,
-        safety_reserve_gib, prefill_chunk_tokens, tp_size, dcp_size,
+        gpu, memory_budget_gib, model, 1, batch_size, weight_dtype, kv_dtype,
+        indexer_dtype, safety_reserve_gib, prefill_chunk_tokens, tp_size, dcp_size,
     ):
         return 0
 
     if model.max_context is not None:
         hi = model.max_context
         if _memory_fits(
-            gpu, model, hi, batch_size, weight_dtype, kv_dtype, indexer_dtype,
-            safety_reserve_gib, prefill_chunk_tokens, tp_size, dcp_size,
+            gpu, memory_budget_gib, model, hi, batch_size, weight_dtype, kv_dtype,
+            indexer_dtype, safety_reserve_gib, prefill_chunk_tokens, tp_size, dcp_size,
         ):
             return hi
     else:
         hi = 8192
         cap = 16_777_216
         while hi < cap and _memory_fits(
-            gpu, model, hi, batch_size, weight_dtype, kv_dtype, indexer_dtype,
-            safety_reserve_gib, prefill_chunk_tokens, tp_size, dcp_size,
+            gpu, memory_budget_gib, model, hi, batch_size, weight_dtype, kv_dtype,
+            indexer_dtype, safety_reserve_gib, prefill_chunk_tokens, tp_size, dcp_size,
         ):
             hi *= 2
         hi = min(hi, cap)
@@ -91,8 +94,8 @@ def _max_context_by_vram(
     while lo < hi:
         mid = (lo + hi + 1) // 2
         if _memory_fits(
-            gpu, model, mid, batch_size, weight_dtype, kv_dtype, indexer_dtype,
-            safety_reserve_gib, prefill_chunk_tokens, tp_size, dcp_size,
+            gpu, memory_budget_gib, model, mid, batch_size, weight_dtype, kv_dtype,
+            indexer_dtype, safety_reserve_gib, prefill_chunk_tokens, tp_size, dcp_size,
         ):
             lo = mid
         else:
@@ -112,6 +115,8 @@ def plan_inference(
     prefill_chunk_tokens: int = DEFAULT_PREFILL_CHUNK_TOKENS,
     tp_size: int = 1,
     dcp_size: int = 1,
+    engine: str = "generic",
+    gpu_memory_utilization: float | None = None,
 ) -> PlanResult:
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
@@ -119,6 +124,7 @@ def plan_inference(
         raise ValueError("prefill_chunk_tokens must be >= 1")
     _validate_parallelism(model, tp_size, dcp_size)
 
+    engine_budget = resolve_engine_budget(gpu, engine, gpu_memory_utilization)
     resolved_weight_dtype = resolve_weight_dtype(weight_dtype, model)
     resolved_kv_dtype = resolve_kv_dtype(kv_dtype, resolved_weight_dtype, model)
     resolved_indexer_dtype = resolve_indexer_dtype(indexer_dtype, model, resolved_kv_dtype)
@@ -129,9 +135,9 @@ def plan_inference(
         raise ValueError("context must be >= 1")
 
     max_vram = _max_context_by_vram(
-        gpu, model, batch_size, resolved_weight_dtype, resolved_kv_dtype,
-        resolved_indexer_dtype, safety_reserve_gib, prefill_chunk_tokens,
-        tp_size, dcp_size,
+        gpu, engine_budget.memory_budget_gib, model, batch_size,
+        resolved_weight_dtype, resolved_kv_dtype, resolved_indexer_dtype,
+        safety_reserve_gib, prefill_chunk_tokens, tp_size, dcp_size,
     )
     max_usable = min(max_vram, model.max_context) if model.max_context else max_vram
 
@@ -148,10 +154,29 @@ def plan_inference(
         tp_size=tp_size,
         dcp_size=dcp_size,
     )
-    spare = gpu.free_gib - breakdown.total_gib
-    fits = spare >= 0 and (model.max_context is None or context <= model.max_context)
+    spare = engine_budget.memory_budget_gib - breakdown.total_gib
+    fits = (
+        engine_budget.startup_ok
+        and spare >= 0
+        and (model.max_context is None or context <= model.max_context)
+    )
 
     warnings = list(model.warnings)
+    if engine_budget.engine == "vllm":
+        util = engine_budget.gpu_memory_utilization or 0.0
+        warnings.append(
+            f"vLLM mode uses total VRAM × gpu_memory_utilization ({util:.3f}) = "
+            f"{engine_budget.memory_budget_gib:.2f} GiB per rank as the engine budget."
+        )
+        if not engine_budget.startup_ok:
+            warnings.append(
+                f"vLLM would reject startup because current free VRAM ({gpu.free_gib:.2f} GiB) is below "
+                f"its requested {engine_budget.memory_budget_gib:.2f} GiB budget."
+            )
+        warnings.append(
+            "vLLM profiles non-KV memory at startup before allocating cache. VRAMScout predicts that footprint statically, "
+            "so engine-mode max context is a preflight estimate rather than a replacement for vLLM's profiler."
+        )
     if model.max_context is not None and context > model.max_context:
         warnings.append(
             f"Requested context {context:,} exceeds the model-declared limit of {model.max_context:,}."
@@ -210,4 +235,9 @@ def plan_inference(
         warnings=warnings,
         tp_size=tp_size,
         dcp_size=dcp_size,
+        engine=engine_budget.engine,
+        memory_budget_gib=engine_budget.memory_budget_gib,
+        gpu_memory_utilization=engine_budget.gpu_memory_utilization,
+        engine_startup_ok=engine_budget.startup_ok,
+        outside_engine_headroom_gib=engine_budget.outside_engine_headroom_gib,
     )

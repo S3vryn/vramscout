@@ -3,4 +3,4 @@
 from .planner import plan_inference
 
 __all__ = ["plan_inference"]
-__version__ = "0.4.0"
+__version__ = "0.5.0"
