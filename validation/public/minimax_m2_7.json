@@ -26,5 +26,17 @@
   "notes": [
     "The vLLM 48.44 GiB startup requirement is an unusually clean ground truth for raw BF16 KV math and matches the 62-layer, 8-KV-head, 128-dim released config.",
     "The official 220 GB / 240 GB figures are approximate deployment guidance and are not used as exact binary-GiB validation targets."
-  ]
+  ],
+  "engine_validation": {
+    "hardware": "2x NVIDIA H200, 140.4 GiB per GPU",
+    "tensor_parallel_size": 2,
+    "kv_dtype": "fp8",
+    "gpu_memory_utilization": 0.92,
+    "public_model_load_gib_per_gpu": 107.31,
+    "public_available_kv_gib_per_gpu": 12.2,
+    "predicted_available_kv_gib_conditioned_on_public_model_load": 11.383579703521733,
+    "absolute_error_percent": 6.691969643264482,
+    "source": "https://github.com/kaitakuai/experiments/blob/main/2026-05/minimax_m27_2xh200_h100img_pr36/README.md",
+    "scope": "Full vLLM-style startup budget validation conditioned on the measured model-load residency. The remaining error tests VRAMScout runtime/prefill/reserve heuristics rather than checkpoint size."
+  }
 }
