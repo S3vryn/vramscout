@@ -16,7 +16,6 @@ class ModelInspectionError(RuntimeError):
 NONSTANDARD_CACHE_TYPES = {
     "deepseek_v2",
     "deepseek_v3",
-    "deepseek_v4",
     "mamba",
     "mamba2",
     "jamba",
@@ -140,7 +139,7 @@ def _estimate_dense_params(config: dict[str, Any]) -> int:
     q_heads = _first_int(config, "num_attention_heads", "n_head")
     kv_heads = _first_int(config, "num_key_value_heads", "num_kv_heads") or q_heads
     intermediate = _first_int(config, "intermediate_size", "ffn_dim", "n_inner")
-    head_dim = _first_int(config, "head_dim")
+    head_dim = _first_int(config, "head_dim", "qk_head_dim")
 
     if not all([hidden, layers, vocab, q_heads, kv_heads]):
         raise ModelInspectionError(
@@ -152,7 +151,11 @@ def _estimate_dense_params(config: dict[str, Any]) -> int:
         head_dim = hidden // q_heads
 
     model_type = str(config.get("model_type") or "").lower()
-    if model_type in NONSTANDARD_CACHE_TYPES or _first_int(config, "num_local_experts", "num_experts"):
+    if (
+        model_type in NONSTANDARD_CACHE_TYPES
+        or model_type in {"deepseek_v4", "glm_moe_dsa"}
+        or _first_int(config, "num_local_experts", "num_experts", "n_routed_experts")
+    ):
         raise ModelInspectionError(
             "This architecture needs Hugging Face safetensors parameter metadata; "
             "the dense fallback would be misleading."
@@ -218,6 +221,66 @@ def _qwen35_cache_metadata(text: dict[str, Any]) -> tuple[int, int, int, str]:
     return full_layers, linear_layers, state_bytes_per_batch, label
 
 
+def _deepseek_v4_cache_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    layers = _first_int(config, "num_hidden_layers")
+    head_dim = _first_int(config, "head_dim", "qk_head_dim")
+    rope_dim = _first_int(config, "qk_rope_head_dim")
+    index_head_dim = _first_int(config, "index_head_dim")
+    sliding_window = _first_int(config, "sliding_window")
+    ratios = config.get("compress_ratios")
+    if not all([layers, head_dim, rope_dim, index_head_dim, sliding_window]) or not isinstance(ratios, list):
+        raise ModelInspectionError("DeepSeek-V4 config is missing hybrid-cache dimensions/compression ratios.")
+
+    active = [int(x) for x in ratios[:layers] if isinstance(x, int)]
+    if len(active) != layers:
+        raise ModelInspectionError("DeepSeek-V4 compress_ratios does not cover every decoder layer.")
+    supported = {0, 4, 128}
+    unknown = sorted(set(active) - supported)
+    if unknown:
+        raise ModelInspectionError(f"Unsupported DeepSeek-V4 compression ratios: {unknown}")
+
+    return {
+        "sliding_only_layers": active.count(0),
+        "csa_layers": active.count(4),
+        "hca_layers": active.count(128),
+        "sliding_window": sliding_window,
+        "csa_compress_ratio": 4,
+        "hca_compress_ratio": 128,
+        "main_head_dim": head_dim,
+        "rope_head_dim": rope_dim,
+        "index_head_dim": index_head_dim,
+        "fp8_scale_bytes_per_entry": 8,
+        "fp4_indexer_scale_bytes_per_entry": 4,
+    }
+
+
+def _glm_moe_dsa_cache_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    layers = _first_int(config, "num_hidden_layers")
+    kv_lora_rank = _first_int(config, "kv_lora_rank")
+    rope_dim = _first_int(config, "qk_rope_head_dim")
+    index_head_dim = _first_int(config, "index_head_dim")
+    indexer_types = config.get("indexer_types")
+    if not all([layers, kv_lora_rank, rope_dim, index_head_dim]) or not isinstance(indexer_types, list):
+        raise ModelInspectionError("GLM MoE DSA config is missing MLA/IndexShare cache metadata.")
+    active = [str(x).lower() for x in indexer_types[:layers]]
+    if len(active) != layers:
+        raise ModelInspectionError("GLM indexer_types does not cover every decoder layer.")
+    unknown = sorted(set(active) - {"full", "shared"})
+    if unknown:
+        raise ModelInspectionError(f"Unsupported GLM indexer types: {unknown}")
+    return {
+        "mla_latent_dim": kv_lora_rank + rope_dim,
+        "kv_lora_rank": kv_lora_rank,
+        "rope_head_dim": rope_dim,
+        "index_head_dim": index_head_dim,
+        "indexer_full_layers": active.count("full"),
+        "indexer_shared_layers": active.count("shared"),
+        "fp8_mla_scale_bytes_per_entry": 16,
+        "fp8_indexer_scale_bytes_per_entry": 4,
+        "fp4_indexer_scale_bytes_per_entry": 4,
+    }
+
+
 def inspect_model(model_ref: str, revision: str | None = None) -> ModelSpec:
     root_config, _ = _load_config(model_ref, revision=revision)
     warnings: list[str] = []
@@ -237,7 +300,7 @@ def inspect_model(model_ref: str, revision: str | None = None) -> ModelSpec:
     hidden = _first_int(config, "hidden_size", "n_embd", "d_model")
     q_heads = _first_int(config, "num_attention_heads", "n_head")
     kv_heads = _first_int(config, "num_key_value_heads", "num_kv_heads") or q_heads
-    head_dim = _first_int(config, "head_dim")
+    head_dim = _first_int(config, "head_dim", "qk_head_dim")
     if head_dim is None and hidden and q_heads:
         head_dim = hidden // q_heads
 
@@ -263,7 +326,7 @@ def inspect_model(model_ref: str, revision: str | None = None) -> ModelSpec:
         "n_positions",
     )
     sliding_window = _first_int(config, "sliding_window")
-    if sliding_window:
+    if sliding_window and root_model_type != "deepseek_v4":
         warnings.append(
             "This model declares sliding-window attention. VRAMScout currently reports a conservative full-cache upper bound; "
             "some serving engines can use less KV memory."
@@ -301,6 +364,7 @@ def inspect_model(model_ref: str, revision: str | None = None) -> ModelSpec:
     recurrent_layers = 0
     recurrent_state_bytes_per_batch = 0
     recurrent_state_label = None
+    cache_metadata: dict[str, Any] = {}
 
     if root_model_type == "qwen3_5" or model_type == "qwen3_5_text":
         kv_layers, recurrent_layers, recurrent_state_bytes_per_batch, recurrent_state_label = _qwen35_cache_metadata(config)
@@ -308,6 +372,22 @@ def inspect_model(model_ref: str, revision: str | None = None) -> ModelSpec:
         warnings.append(
             f"Hybrid cache detected: {kv_layers} full-attention layers grow with context; "
             f"{recurrent_layers} linear-attention layers use constant GatedDeltaNet state."
+        )
+    elif root_model_type == "deepseek_v4" or model_type == "deepseek_v4":
+        cache_kind = "deepseek_v4_hybrid"
+        cache_metadata = _deepseek_v4_cache_metadata(config)
+        kv_layers = 0
+        warnings.append(
+            "DeepSeek-V4 hybrid cache detected: shared K=V sliding window + C4 CSA + C128 HCA; "
+            "VRAMScout uses architecture-specific compressed-cache accounting."
+        )
+    elif root_model_type == "glm_moe_dsa" or model_type == "glm_moe_dsa":
+        cache_kind = "glm_moe_dsa"
+        cache_metadata = _glm_moe_dsa_cache_metadata(config)
+        kv_layers = 0
+        warnings.append(
+            f"GLM DSA/IndexShare cache detected: {cache_metadata['mla_latent_dim']}-dim MLA latent per layer + "
+            f"{cache_metadata['indexer_full_layers']} materialized indexer caches shared across the remaining layers."
         )
 
     dtype_value = config.get("dtype", config.get("torch_dtype", root_config.get("dtype", root_config.get("torch_dtype"))))
@@ -337,4 +417,5 @@ def inspect_model(model_ref: str, revision: str | None = None) -> ModelSpec:
         has_vision_encoder=has_vision,
         checkpoint_size_bytes=checkpoint_size_bytes,
         checkpoint_size_source=checkpoint_size_source,
+        cache_metadata=cache_metadata,
     )
