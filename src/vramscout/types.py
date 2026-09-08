@@ -50,6 +50,8 @@ class ModelSpec:
 
 @dataclass(slots=True)
 class MemoryBreakdown:
+    # All values are per limiting GPU/rank. This keeps multi-GPU planning useful:
+    # compare one rank's peak against one rank's free VRAM.
     weights_gib: float
     kv_cache_gib: float
     recurrent_state_gib: float
@@ -85,6 +87,8 @@ class PlanResult:
     max_context_vram: int
     max_context_usable: int
     warnings: list[str] = field(default_factory=list)
+    tp_size: int = 1
+    dcp_size: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

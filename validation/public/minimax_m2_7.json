@@ -1,0 +1,30 @@
+{
+  "model": "MiniMaxAI/MiniMax-M2.7",
+  "architecture": {
+    "layers": 62,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "config_max_position_embeddings": 204800,
+    "official_single_sequence_serving_limit": 196608
+  },
+  "cache_validation": {
+    "kv_dtype": "bf16",
+    "context": 204800,
+    "predicted_gib": 48.4375,
+    "public_vllm_required_gib": 48.44,
+    "absolute_error_percent": 0.005161023947146421,
+    "source": "https://github.com/vllm-project/vllm/issues/42017"
+  },
+  "official_deployment_guidance": {
+    "weights_approx_gb": 220,
+    "cache_per_1m_tokens_approx_gb": 240,
+    "four_by_96g_total_cache_tokens": 400000,
+    "eight_by_144g_total_cache_tokens": 3000000,
+    "single_sequence_limit_tokens": 196608,
+    "source": "https://github.com/MiniMax-AI/MiniMax-M2.7/blob/main/docs/vllm_deploy_guide.md"
+  },
+  "notes": [
+    "The vLLM 48.44 GiB startup requirement is an unusually clean ground truth for raw BF16 KV math and matches the 62-layer, 8-KV-head, 128-dim released config.",
+    "The official 220 GB / 240 GB figures are approximate deployment guidance and are not used as exact binary-GiB validation targets."
+  ]
+}

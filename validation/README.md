@@ -1,12 +1,12 @@
 # Public validation
 
-VRAMScout keeps public reference data next to the estimator so accuracy claims are auditable. We deliberately separate three levels of evidence:
+VRAMScout keeps public reference data next to the estimator so accuracy claims are auditable. We separate three evidence levels:
 
-1. **checkpoint bytes** — weight residency proxy from actual safetensors shard sizes;
-2. **architecture cache math** — KV / latent / recurrent / indexer state implied by the released config;
-3. **engine-observed cache** — vLLM startup numbers, which also include block layout and allocator effects.
+1. **checkpoint bytes** — actual safetensors shard sizes for weight residency;
+2. **architecture cache math** — KV / MLA / recurrent / sparse-indexer state implied by released configs;
+3. **engine-observed cache** — vLLM startup memory and cache-token capacity.
 
-Run all checked-in comparisons:
+Run the checked-in comparisons:
 
 ```bash
 python validation/run.py
@@ -14,44 +14,54 @@ python validation/run.py
 
 ## Current results
 
-| Model / target | VRAMScout | Public reference | Absolute error |
+| Model / target | VRAMScout | Public reference | Abs. error |
 |---|---:|---:|---:|
 | Qwen3.8-27B BF16 weights | 51.781 GiB | 51.70 GiB | **0.16%** |
 | Qwen3.8-27B FP8 weights | 28.778 GiB | 28.56 GiB | **0.76%** |
 | Qwen3.8-27B NVFP4 weights | 24.587 GiB | 24.60 GiB | **0.05%** |
 | DeepSeek-V4 61-layer BF16 cache @ 1M | 9.625 GiB | 9.62 GiB | **0.05%** |
-| GLM-5.2 FP8 MLA + BF16 IndexShare cache | 55.219 KiB/token | 56.584 KiB/token | **2.41%** |
+| GLM-5.2 FP8 MLA + BF16 IndexShare | 55.219 KiB/token | 56.584 KiB/token | **2.41%** |
+| **Kimi-K2.5 BF16 MLA, TP8/DCP1** | 68.625 KiB/token | 68.626 KiB/token | **0.0015%** |
+| **MiniMax-M2.7 BF16 KV @ 204,800** | 48.4375 GiB | 48.44 GiB | **0.0052%** |
 
-The GLM number is the most demanding comparison above: vLLM reported **126.41 GiB** available cache and **2,342,528 logical cache tokens**, so its reference includes real cache-block/layout overhead rather than being the same algebra repeated elsewhere.
+The Kimi comparison is particularly useful for parallelism semantics. A public vLLM run reports **163.59 GiB** available KV memory and **2,499,584** cache tokens on each TP rank. That implies 70,273.06 bytes/logical-token, while the released MLA config predicts 61 × (512 + 64) × 2 = **70,272 bytes/token**. Pure TP therefore does not divide the MLA cache — exactly why DCP matters.
 
-## Qwen3.8-27B
+The MiniMax comparison comes from a vLLM startup error that states **48.44 GiB** of KV is required for a 204,800-token sequence. Standard GQA arithmetic from the released 62-layer / 8-KV-head / 128-head-dim config gives **48.4375 GiB**.
 
-The released config is hybrid: 16 full-attention layers grow ordinary KV state, while 48 GatedDeltaNet linear-attention layers keep constant recurrent/conv state. Treating all 64 layers as full attention would overestimate long-context KV by 4×.
+## Modern architecture notes
 
-Weight validation uses real safetensors shard byte totals for the native BF16 / FP8 / NVFP4 checkpoints rather than a uniform bits-per-parameter guess.
+### Qwen3.8
 
-Sources are recorded in [`public/qwen3_8_27b.json`](public/qwen3_8_27b.json).
+16 full-attention layers grow ordinary KV state; 48 GatedDeltaNet layers keep constant recurrent/conv state. Treating all 64 layers as full attention overestimates long-context KV by roughly 4×.
 
-## DeepSeek-V4
+### DeepSeek-V4
 
-VRAMScout models the short shared-K=V sliding window, CSA compressed cache at 1/4 sequence rate, CSA Lightning Indexer state, and HCA compressed cache at 1/128 sequence rate.
+VRAMScout models the shared-K=V sliding window, C4 CSA compressed cache, Lightning Indexer, and C128 HCA compressed cache instead of forcing the model through a standard KV formula.
 
-vLLM publishes a worked 61-layer BF16 example (30 C4 + 31 C128 layers) at 1,048,576 tokens: **9.62 GiB**. VRAMScout obtains **9.6246 GiB** from the released architecture math.
+### GLM-5.2
 
-The released V4-Flash schedule (43 layers: 2 sliding-only + 21 C4 + 20 C128) is also represented, but its 1M numbers are labeled architecture estimates because an exact public engine byte total for that exact layout is not used as ground truth.
+The released config uses a 512-dim compressed latent plus 64 RoPE dimensions and IndexShare. Only 21 indexer caches are materialized while the remaining 57 layers share them.
 
-Sources are recorded in [`public/deepseek_v4.json`](public/deepseek_v4.json).
+### Kimi-K2.5 / Kimi-K2.6
 
-## GLM-5.2
+Kimi uses MLA with a 512-dim latent plus 64 RoPE dimensions across 61 layers. The cache is effectively one shared latent rather than per-head K/V, so pure tensor parallelism replicates it. vLLM Decode Context Parallelism shards the cache along sequence length; VRAMScout exposes this as `--dcp`.
 
-The official config declares 78 layers, a 512-dim compressed KV latent plus 64 RoPE dimensions, and IndexShare: only **21** indexer caches are materialized while **57** layers share them.
+Sources:
+- [`public/kimi_k2_5.json`](public/kimi_k2_5.json)
+- MoonshotAI/Kimi-K2.5 issue #34 (vLLM TP8/DCP1 startup log)
+- vLLM issue #40608 and the vLLM DCP write-up for Kimi-K2.6 DCP behavior
 
-For the public vLLM path with FP8 KV and `use_fp4_indexer_cache=False`, VRAMScout predicts 55.219 KiB/logical token. A public vLLM startup log reports 126.41 GiB for 2,342,528 logical tokens = 56.584 KiB/logical token, a **2.41%** difference.
+### MiniMax-M2.7
 
-Sources are recorded in [`public/glm_5_2.json`](public/glm_5_2.json).
+MiniMax-M2.7 uses an ordinary GQA cache (62 layers, 8 KV heads, 128 head dim), so the cache is cleanly tensor-parallel sharded when TP divides the KV-head count. The official deployment guide also reports roughly **220 GB weights**, **240 GB cache per 1M aggregate context tokens**, and a **196K single-sequence serving limit**.
+
+Sources:
+- [`public/minimax_m2_7.json`](public/minimax_m2_7.json)
+- MiniMax official vLLM deployment guide
+- vLLM issue #42017
 
 ## What is not claimed yet
 
-VRAMScout does **not** yet claim that total process peak VRAM is within these error bands. Total serving memory also depends on tensor/expert parallel sharding, CUDA graphs, kernels, model-specific workspace, paged-cache allocation, prefix cache, concurrency and prefill settings.
+The tiny cache/weight errors above do **not** mean total process peak is known to the same accuracy. Full serving peak also depends on CUDA graphs, allocator fragmentation, expert-parallel routing buffers, attention kernels, speculative decoding, multimodal preprocessor caches, paged-cache rounding and prefill settings.
 
-The next validation layer is engine-aware: compare full vLLM/SGLang startup memory and max-context boundaries under pinned commands and hardware.
+VRAMScout labels these terms as estimates instead of hiding them inside a fake “exact” number. The next validation layer is engine-aware full-startup calibration under pinned vLLM/SGLang commands and hardware.
