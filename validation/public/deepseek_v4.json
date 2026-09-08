@@ -1,0 +1,31 @@
+{
+  "model_family": "DeepSeek-V4",
+  "checked_at": "2026-09-08",
+  "sources": {
+    "flash_config": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/main/config.json",
+    "hf_architecture_blog": "https://huggingface.co/blog/deepseekv4",
+    "vllm_cache_blog": "https://vllm.ai/blog/2026-04-24-deepseek-v4"
+  },
+  "architecture": {
+    "native_context": 1048576,
+    "sliding_window": 128,
+    "csa_compression": 4,
+    "hca_compression": 128,
+    "shared_k_equals_v": true
+  },
+  "cache_validation": [
+    {
+      "case": "V4-Pro-style 61-layer BF16 cache at 1M",
+      "layout": "30 CSA(C4) + 31 HCA(C128)",
+      "predicted_gib": 9.6246337890625,
+      "public_vllm_gib": 9.62,
+      "note": "vLLM publishes the arithmetic for this 61-layer layout as its exact worked example."
+    }
+  ],
+  "flash_static_estimates": {
+    "layout": "43 layers: 2 sliding-only + 21 CSA(C4) + 20 HCA(C128)",
+    "bf16_cache_gib_at_1m": 6.7239990234375,
+    "fp8_main_fp4_indexer_cache_gib_at_1m": 3.434878349304199,
+    "note": "The public DeepSeek-V4-Flash config fixes this layer schedule. These are architecture-derived cache estimates; a public byte-for-byte engine number for this exact Flash layout was not used as ground truth."
+  }
+}
