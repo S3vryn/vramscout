@@ -12,7 +12,7 @@ VRAMScout is a small CLI for **deployment memory planning**. It reads Hugging Fa
 - safety reserve;
 - the **maximum context length that fits**.
 
-> **v0.4 alpha:** support now covers **Qwen3.8, DeepSeek-V4, GLM-5.2, Kimi-K2.5/K2.6 and MiniMax-M2.7**, plus ordinary decoder-only Transformers. Multi-GPU TP planning and Kimi MLA DCP cache sharding are included. Public accuracy checks live in [`validation/`](validation/README.md).
+> **v0.5 alpha:** support covers **Qwen3.8, DeepSeek-V4, GLM-5.2, Kimi-K2.5/K2.6 and MiniMax-M2.7**, plus ordinary decoder-only Transformers. Multi-GPU TP, Kimi MLA DCP, and a **vLLM memory-budget mode** are included. Public accuracy checks live in [`validation/`](validation/README.md).
 
 ## Quick start
 
@@ -21,6 +21,9 @@ pip install -e .
 
 # Current GPU
 vramscout Qwen/Qwen3.8-27B
+
+# Match vLLM's memory-budget policy (current default utilization: 0.92)
+vramscout Qwen/Qwen3.8-27B-FP8 --engine vllm
 
 # 8 local GPUs, Kimi MLA cache sequence-sharded with DCP
 vramscout moonshotai/Kimi-K2.6 --tp 8 --dcp 8 --kv-dtype fp8 --context 262144
@@ -81,6 +84,28 @@ Estimated peak / rank                                     ...
 
 Exact numbers depend on live Hugging Face checkpoint metadata and your current GPU state.
 
+## vLLM engine mode
+
+Generic mode plans against VRAM that is free right now. vLLM uses a different startup policy: it requests
+
+```text
+requested memory = total GPU memory × gpu_memory_utilization
+```
+
+and refuses startup if current free VRAM is below that request. Current vLLM defaults to `0.92`. VRAMScout can mirror this preflight policy:
+
+```bash
+vramscout MiniMaxAI/MiniMax-M2.7 \
+  --engine vllm \
+  --gpu-memory-utilization 0.92 \
+  --tp 2 \
+  --context 180000
+```
+
+The output distinguishes **physical free VRAM** from the **vLLM planning budget per rank**. VRAMScout still estimates the non-KV footprint statically; vLLM itself performs an on-device profiling run before allocating KV cache. Engine mode is therefore a preflight estimate, not a claim to reproduce the profiler exactly.
+
+A public 2×H200 MiniMax-M2.7 run provides a first full-startup check: with 140.4 GiB/GPU, `gpu_memory_utilization=0.92`, 107.31 GiB loaded model memory, and a 12.2 GiB vLLM KV pool, VRAMScout's conservative non-KV heuristic predicts **11.38 GiB** available KV — **6.69% error**. Raw architecture/cache checks remain much tighter (typically <3%).
+
 ## Multi-GPU semantics
 
 ```bash
@@ -129,6 +154,7 @@ Checked-in comparisons currently include:
 | GLM-5.2 vLLM effective cache | 55.219 KiB/token | 56.584 KiB/token | **2.41%** |
 | **Kimi-K2.5 vLLM MLA, TP8/DCP1** | 68.625 KiB/token | 68.626 KiB/token | **0.0015%** |
 | **MiniMax-M2.7 BF16 KV @ 204,800** | 48.4375 GiB | 48.44 GiB | **0.0052%** |
+| **MiniMax-M2.7 H200 vLLM KV pool** | 11.38 GiB | 12.20 GiB | **6.69%** |
 
 Run them locally:
 
@@ -202,6 +228,7 @@ python validation/run.py
 - [x] Kimi-K2.5/K2.6 MLA + DCP semantics
 - [x] MiniMax-M2.7 + TP GQA sharding
 - [x] public architecture/cache validation corpus
+- [x] vLLM gpu-memory-utilization preflight semantics
 - [ ] engine-aware vLLM/SGLang measured-peak profiles
 - [ ] expert-parallel / pipeline-parallel weight placement
 - [ ] DCP for additional MLA/compressed-cache architectures
