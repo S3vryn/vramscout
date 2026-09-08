@@ -31,7 +31,7 @@ def plan_inference(
     if context < 1:
         raise ValueError("context must be >= 1")
 
-    linear, _, _, _ = build_linear_memory_model(
+    linear, _, _, _, _ = build_linear_memory_model(
         gpu,
         model,
         batch_size,
@@ -65,9 +65,9 @@ def plan_inference(
         warnings.append(
             f"Requested context {context:,} exceeds the model-declared limit of {model.max_context:,}."
         )
-    if resolved_weight_dtype in {"int4", "int8"}:
+    if resolved_weight_dtype in {"int4", "int8", "fp8", "nvfp4"}:
         warnings.append(
-            "Quantized weight memory includes a small packing/scale overhead estimate; exact usage depends on the quantization format and engine."
+            "Quantized weight memory uses native checkpoint shard bytes when available; otherwise it falls back to a format-aware estimate. Exact loaded VRAM still depends on the serving engine."
         )
     warnings.append(
         "Runtime/prefill memory is a conservative static estimate, not a measured peak. Kernel choice, CUDA graphs, allocator state and serving engine can change real usage."
