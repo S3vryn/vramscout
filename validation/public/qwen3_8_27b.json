@@ -1,0 +1,46 @@
+{
+  "model_family": "Qwen3.8-27B",
+  "checked_at": "2026-09-08",
+  "architecture": {
+    "layers": 64,
+    "full_attention_layers": 16,
+    "linear_attention_layers": 48,
+    "kv_heads": 4,
+    "head_dim": 256,
+    "native_context": 262144
+  },
+  "sources": {
+    "config": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json",
+    "bf16_files": "https://huggingface.co/Qwen/Qwen3.8-27B/tree/main",
+    "fp8_files": "https://huggingface.co/Qwen/Qwen3.8-27B-FP8/tree/main",
+    "nvfp4_files": "https://huggingface.co/Inferact/Qwen3.8-27B-NVFP4/tree/main",
+    "vllm_recipe": "https://recipes.vllm.ai/Qwen/Qwen3.8-27B"
+  },
+  "weight_validation": [
+    {
+      "variant": "BF16",
+      "hf_checkpoint_decimal_gb": 55.6,
+      "predicted_gib_from_checkpoint_bytes": 51.781,
+      "public_vllm_weight_gib": 51.7
+    },
+    {
+      "variant": "FP8",
+      "hf_checkpoint_decimal_gb": 30.9,
+      "predicted_gib_from_checkpoint_bytes": 28.778,
+      "public_vllm_weight_gib": 28.56,
+      "note": "vLLM recipe reports 14.28 GiB weights/GPU at TP=2; doubled here for whole-checkpoint comparison"
+    },
+    {
+      "variant": "Inferact NVFP4",
+      "hf_checkpoint_decimal_gb": 26.4,
+      "predicted_gib_from_checkpoint_bytes": 24.587,
+      "public_vllm_weight_gib": 24.6
+    }
+  ],
+  "cache_validation": {
+    "fp8_kv_bytes_per_token": 32768,
+    "bf16_kv_bytes_per_token": 65536,
+    "derivation": "2 * 16 full-attention layers * 4 KV heads * 256 head_dim * bytes_per_element",
+    "linear_state": "constant GatedDeltaNet recurrent/conv state; does not grow with context in the Transformers cache model"
+  }
+}
