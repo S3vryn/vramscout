@@ -51,10 +51,34 @@ def glm() -> None:
     print()
 
 
+def kimi() -> None:
+    data = load("kimi_k2_5.json")
+    case = data["cache_validation"]
+    pred = case["predicted_bytes_per_logical_token"]
+    obs = case["public_effective_bytes_per_logical_token"]
+    print("Kimi-K2.5 · vLLM MLA cache validation (TP8, DCP1)")
+    print(f"predicted             {pred / 1024:>8.3f} KiB/logical token")
+    print(f"public vLLM           {obs / 1024:>8.3f} KiB/logical token")
+    print(f"absolute error        {pct_error(pred, obs):>8.4f}%")
+    print()
+
+
+def minimax() -> None:
+    data = load("minimax_m2_7.json")
+    case = data["cache_validation"]
+    pred = case["predicted_gib"]
+    obs = case["public_vllm_required_gib"]
+    print("MiniMax-M2.7 · vLLM BF16 KV requirement")
+    print(f"204,800-token cache   {pred:>8.4f}   {obs:>7.2f}   {pct_error(pred, obs):>7.4f}%")
+    print()
+
+
 def main() -> None:
     qwen()
     deepseek()
     glm()
+    kimi()
+    minimax()
 
 
 if __name__ == "__main__":
