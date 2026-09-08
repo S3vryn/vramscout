@@ -70,6 +70,11 @@ def minimax() -> None:
     obs = case["public_vllm_required_gib"]
     print("MiniMax-M2.7 · vLLM BF16 KV requirement")
     print(f"204,800-token cache   {pred:>8.4f}   {obs:>7.2f}   {pct_error(pred, obs):>7.4f}%")
+    engine = data.get("engine_validation")
+    if engine:
+        pred_pool = engine["predicted_available_kv_gib_conditioned_on_public_model_load"]
+        public_pool = engine["public_available_kv_gib_per_gpu"]
+        print(f"H200 vLLM KV pool    {pred_pool:>8.3f}   {public_pool:>7.2f}   {pct_error(pred_pool, public_pool):>7.3f}%  (full-startup heuristic)")
     print()
 
 
