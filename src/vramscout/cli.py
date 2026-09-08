@@ -29,7 +29,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--context", type=_positive_int, default=None, help="Context length to evaluate (default: min(8192, model limit))")
     p.add_argument("--batch-size", type=_positive_int, default=1, help="Active sequences / batch size (default: 1)")
     p.add_argument("--dtype", choices=["auto", "fp32", "fp16", "bf16", "fp8", "int8", "int4", "nvfp4"], default="auto", help="Weight precision")
-    p.add_argument("--kv-dtype", choices=["auto", "fp32", "fp16", "bf16", "fp8"], default="auto", help="KV-cache precision")
+    p.add_argument("--kv-dtype", choices=["auto", "fp32", "fp16", "bf16", "fp8"], default="auto", help="KV/cache precision")
+    p.add_argument("--indexer-dtype", choices=["auto", "bf16", "fp16", "fp8", "fp4"], default="auto", help="Sparse-indexer cache precision for architectures that use one")
+    p.add_argument("--prefill-chunk", type=_positive_int, default=8192, help="Active prefill tokens used for scratch estimate (default: 8192)")
     p.add_argument("--gpu-index", type=int, default=0, help="NVIDIA GPU index (default: 0)")
     p.add_argument("--vram-gib", type=float, default=None, help="Manual free/total VRAM budget; skips GPU auto-detection")
     p.add_argument("--reserve-gib", type=float, default=None, help="Override safety reserve (default: max(1 GiB, 5%% of total VRAM))")
@@ -56,14 +58,31 @@ def _print_human(result) -> None:
     model.add_column("Value", justify="right")
     model.add_row("Checkpoint", result.model.model_id)
     model.add_row("Architecture", result.model.model_type)
-    if result.model.cache_kind != "standard":
-        model.add_row("Cache architecture", f"{result.model.cache_kind} · {result.model.effective_kv_layers} KV + {result.model.recurrent_layers} recurrent layers")
+    if result.model.cache_kind == "qwen3_5_hybrid":
+        model.add_row(
+            "Cache architecture",
+            f"Qwen hybrid · {result.model.effective_kv_layers} full-attn KV + {result.model.recurrent_layers} linear-attn",
+        )
+    elif result.model.cache_kind == "deepseek_v4_hybrid":
+        md = result.model.cache_metadata
+        model.add_row(
+            "Cache architecture",
+            f"DeepSeek V4 · SWA + {md.get('csa_layers', '?')} CSA(C4) + {md.get('hca_layers', '?')} HCA(C128)",
+        )
+    elif result.model.cache_kind == "glm_moe_dsa":
+        md = result.model.cache_metadata
+        model.add_row(
+            "Cache architecture",
+            f"GLM DSA · {md.get('mla_latent_dim', '?')}-dim MLA + {md.get('indexer_full_layers', '?')} IndexShare groups",
+        )
     if result.model.has_vision_encoder:
         model.add_row("Vision encoder", "included in checkpoint weights")
     model.add_row("Parameters", f"{result.model.num_params / 1e9:.3f} B")
     model.add_row("Param source", result.model.parameter_source)
     model.add_row("Weights", result.weight_dtype)
-    model.add_row("KV cache", result.kv_dtype)
+    model.add_row("KV/cache", result.kv_dtype)
+    if result.indexer_dtype:
+        model.add_row("Indexer cache", result.indexer_dtype)
     model.add_row("Batch size", str(result.batch_size))
     model.add_row("Requested context", f"{result.context:,}")
     if result.model.max_context:
@@ -75,8 +94,13 @@ def _print_human(result) -> None:
     mem.add_column("Part")
     mem.add_column("GiB", justify="right")
     mem.add_row("Model weights", f"{b.weights_gib:.2f}")
-    kv_label = "KV cache" if result.model.cache_kind == "standard" else f"KV cache ({result.model.effective_kv_layers} full-attn layers)"
-    mem.add_row(kv_label, f"{b.kv_cache_gib:.2f}")
+    if b.cache_parts_gib:
+        for part, gib in b.cache_parts_gib.items():
+            mem.add_row(part, f"{gib:.2f}")
+        if len(b.cache_parts_gib) > 1:
+            mem.add_row("Cache subtotal", f"[bold]{b.kv_cache_gib:.2f}[/bold]")
+    else:
+        mem.add_row("KV/cache", f"{b.kv_cache_gib:.2f}")
     if b.recurrent_state_gib > 0:
         mem.add_row(result.model.recurrent_state_label or "Recurrent state", f"{b.recurrent_state_gib:.2f}")
     mem.add_row("CUDA / runtime", f"{b.runtime_fixed_gib:.2f}")
@@ -112,7 +136,9 @@ def main(argv: list[str] | None = None) -> int:
             batch_size=args.batch_size,
             weight_dtype=args.dtype,
             kv_dtype=args.kv_dtype,
+            indexer_dtype=args.indexer_dtype,
             safety_reserve_gib=args.reserve_gib,
+            prefill_chunk_tokens=args.prefill_chunk,
         )
     except (GPUDetectionError, ModelInspectionError, ValueError) as exc:
         if args.json:

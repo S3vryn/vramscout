@@ -41,6 +41,7 @@ class ModelSpec:
     has_vision_encoder: bool = False
     checkpoint_size_bytes: int | None = None
     checkpoint_size_source: str | None = None
+    cache_metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def effective_kv_layers(self) -> int:
@@ -55,6 +56,7 @@ class MemoryBreakdown:
     runtime_fixed_gib: float
     prefill_scratch_gib: float
     safety_reserve_gib: float
+    cache_parts_gib: dict[str, float] = field(default_factory=dict)
 
     @property
     def total_gib(self) -> float:
@@ -76,6 +78,7 @@ class PlanResult:
     batch_size: int
     weight_dtype: str
     kv_dtype: str
+    indexer_dtype: str | None
     breakdown: MemoryBreakdown
     fits: bool
     spare_gib: float
