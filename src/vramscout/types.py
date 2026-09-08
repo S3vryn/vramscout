@@ -31,11 +31,27 @@ class ModelSpec:
     parameter_source: str = "unknown"
     warnings: list[str] = field(default_factory=list)
 
+    # Modern/hybrid architecture metadata. For an ordinary Transformer,
+    # kv_layers == num_layers and recurrent_state_bytes_per_batch == 0.
+    cache_kind: str = "standard"
+    kv_layers: int | None = None
+    recurrent_layers: int = 0
+    recurrent_state_bytes_per_batch: int = 0
+    recurrent_state_label: str | None = None
+    has_vision_encoder: bool = False
+    checkpoint_size_bytes: int | None = None
+    checkpoint_size_source: str | None = None
+
+    @property
+    def effective_kv_layers(self) -> int:
+        return self.num_layers if self.kv_layers is None else self.kv_layers
+
 
 @dataclass(slots=True)
 class MemoryBreakdown:
     weights_gib: float
     kv_cache_gib: float
+    recurrent_state_gib: float
     runtime_fixed_gib: float
     prefill_scratch_gib: float
     safety_reserve_gib: float
@@ -45,6 +61,7 @@ class MemoryBreakdown:
         return (
             self.weights_gib
             + self.kv_cache_gib
+            + self.recurrent_state_gib
             + self.runtime_fixed_gib
             + self.prefill_scratch_gib
             + self.safety_reserve_gib
@@ -69,4 +86,5 @@ class PlanResult:
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["breakdown"]["total_gib"] = self.breakdown.total_gib
+        data["model"]["effective_kv_layers"] = self.model.effective_kv_layers
         return data
