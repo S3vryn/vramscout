@@ -1,0 +1,28 @@
+{
+  "model_family": "GLM-5.2",
+  "checked_at": "2026-09-08",
+  "sources": {
+    "config": "https://huggingface.co/zai-org/GLM-5.2/blob/main/config.json",
+    "vllm_recipe": "https://recipes.vllm.ai/zai-org/GLM-5.2",
+    "vllm_measured_issue": "https://github.com/vllm-project/vllm/issues/47934"
+  },
+  "architecture": {
+    "layers": 78,
+    "mla_latent_dim": 576,
+    "kv_lora_rank": 512,
+    "rope_head_dim": 64,
+    "index_head_dim": 128,
+    "indexshare_materialized_groups": 21,
+    "indexshare_shared_layers": 57,
+    "native_context": 1048576
+  },
+  "cache_validation": {
+    "configuration": "FP8 MLA cache + BF16 IndexShare cache",
+    "predicted_bytes_per_logical_token": 56544,
+    "public_available_cache_gib": 126.41,
+    "public_gpu_cache_tokens": 2342528,
+    "public_effective_bytes_per_logical_token": 57942.404091579694,
+    "absolute_error_percent": 2.4134381607112383,
+    "note": "vLLM issue #47934 reports FP8 KV, use_fp4_indexer_cache=False, 126.41 GiB available KV memory and 2,342,528 logical cache tokens. The public run includes allocator/block-layout effects, so this is a stronger engine-level comparison than raw tensor arithmetic alone."
+  }
+}
