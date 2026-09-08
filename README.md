@@ -1,143 +1,144 @@
 # VRAMScout
 
-**Can this Hugging Face LLM fit on the GPU I have right now — and how much context can I afford?**
+**Can this modern Hugging Face model fit on the GPU I have right now — and how much context can I afford?**
 
-VRAMScout is a small CLI that detects the **current free VRAM** on an NVIDIA GPU, reads a model's Hugging Face metadata without downloading the checkpoint weights, and estimates:
+VRAMScout detects current NVIDIA VRAM, reads Hugging Face model metadata **without downloading checkpoint weights**, and breaks inference memory into weights, KV cache, recurrent/hybrid state, runtime workspace and safety reserve.
 
-- whether the model fits at a requested context length;
-- model-weight memory;
-- KV-cache memory;
-- CUDA/runtime overhead;
-- prefill scratch memory;
-- safety reserve;
-- the **maximum context length allowed by current free VRAM**.
-
-It is designed for the common pre-deployment question: *"I have this GPU and this model. Will it actually fit?"*
-
-> Status: **v0.1 / alpha.** Weight and standard Transformer KV arithmetic are near-exact once model metadata is known. Runtime and prefill memory are conservative static estimates and are clearly labeled as such.
+> **v0.2 alpha:** Qwen3.8 hybrid attention is now supported, including the 27B BF16 / FP8 / NVFP4 checkpoints. Public validation lives in [`validation/`](validation/README.md).
 
 ## Quick start
 
 ```bash
 pip install -e .
 
-vramscout Qwen/Qwen3-8B
+vramscout Qwen/Qwen3.8-27B
+vramscout Qwen/Qwen3.8-27B --context 262144 --kv-dtype fp8
+vramscout Qwen/Qwen3.8-27B-FP8 --kv-dtype fp8
+vramscout Inferact/Qwen3.8-27B-NVFP4 --vram-gib 32 --kv-dtype fp8
 ```
 
-Example usage:
+Classic decoder-only models still work as before:
 
 ```bash
-# Check the default 8K context (or the model limit if smaller)
 vramscout Qwen/Qwen3-8B
-
-# Ask whether 64K fits
-vramscout Qwen/Qwen3-8B --context 65536
-
-# Quantized weights; KV remains BF16 by default
-vramscout Qwen/Qwen3-8B --dtype int4 --context 65536
-
-# Explicit FP8 KV cache (only use if your serving engine supports it)
-vramscout Qwen/Qwen3-32B --dtype int8 --kv-dtype fp8
-
-# Select another installed NVIDIA GPU
-vramscout meta-llama/Llama-3.1-8B-Instruct --gpu-index 1
-
-# Plan against a hypothetical/rented 48 GiB GPU
-vramscout Qwen/Qwen3-32B --vram-gib 48
-
-# Script-friendly output
-vramscout Qwen/Qwen3-8B --json
+vramscout meta-llama/Llama-3.1-8B-Instruct --context 65536
 ```
 
 ## What it reports
 
+For Qwen3.8 the output is architecture-aware rather than treating all 64 layers as ordinary KV attention:
+
 ```text
-VRAMScout  CAN RUN
+Model
+Architecture              qwen3_5_text
+Cache architecture         qwen3_5_hybrid · 16 KV + 48 recurrent layers
+Vision encoder             included in checkpoint weights
 
-GPU
-Device                  GPU 0 · NVIDIA GeForce RTX 5090
-Total VRAM                                   31.84 GiB
-Currently used                                2.10 GiB
-Currently free                               29.74 GiB
-
-VRAM breakdown @ 32,768 tokens
-Model weights                                15.26 GiB
-KV cache                                      4.00 GiB
-CUDA / runtime                                0.75 GiB
-Prefill scratch                               1.50 GiB
-Safety reserve                                1.59 GiB
--------------------------------------------------------
-Estimated peak                               23.10 GiB
-Free after estimate                           6.64 GiB
-
-Context budget
-VRAM-derived max                              70,xxx
-Usable max                                    70,xxx
+VRAM breakdown @ 262,144 tokens
+Model weights                         ... GiB
+KV cache (16 full-attn layers)        ... GiB
+GatedDeltaNet state (48 layers)       ... GiB
+CUDA / runtime                        ... GiB
+Prefill scratch                       ... GiB
+Safety reserve                        ... GiB
 ```
 
-Numbers above are illustrative; VRAMScout calculates them from the selected model and GPU.
+## Why the Qwen3.8 case matters
+
+`Qwen/Qwen3.8-27B` is a 64-layer hybrid model: **16 full-attention layers + 48 linear-attention layers**. The full-attention layers use a normal context-growing KV cache; the linear layers keep constant GatedDeltaNet state.
+
+For FP8 KV:
+
+```text
+KV/token = 2 × 16 layers × 4 KV heads × 256 head_dim × 1 byte
+         = 32 KiB/token
+```
+
+Treating all 64 layers as normal attention would overestimate its KV memory by 4×.
+
+## Native checkpoint bytes, not fake uniform quantization
+
+For Hugging Face repositories VRAMScout asks the Hub for safetensors metadata and file sizes only. When a checkpoint is natively quantized (for example FP8 or NVFP4), it prefers the **actual sum of safetensors shard bytes** over `parameter_count × guessed bytes/parameter`.
+
+That matters because modern checkpoints often keep embeddings, attention, vision modules, MTP heads or selected linears at a different precision from the headline quantization format.
+
+Current public Qwen3.8 validation:
+
+| Variant | VRAMScout | Public vLLM reference | Error |
+|---|---:|---:|---:|
+| BF16 | 51.781 GiB | 51.70 GiB | 0.16% |
+| FP8 | 28.778 GiB | 28.56 GiB | 0.76% |
+| Inferact NVFP4 | 24.587 GiB | 24.60 GiB | 0.05% |
+
+See [`validation/README.md`](validation/README.md) for sources and methodology.
 
 ## Memory model
 
-For a standard decoder-only Transformer, model weights are estimated as
+For ordinary full-attention layers:
 
 ```text
-weights = parameter_count × bytes_per_weight
+KV = 2 × full_attention_layers × batch × context × kv_heads × head_dim × bytes
 ```
 
-The KV cache is
+For Qwen3.8, VRAMScout additionally accounts for the fixed GatedDeltaNet recurrent + causal-convolution state from the public Transformers implementation.
+
+Weights and KV/state arithmetic are separated from runtime terms on purpose. CUDA graphs, allocator fragmentation, hybrid-cache paging and serving-engine workspaces are not universal constants.
+
+## GPU budget
+
+By default VRAMScout reads the GPU that exists **right now** through `nvidia-smi`, including currently used/free memory.
+
+```bash
+vramscout Qwen/Qwen3.8-27B --gpu-index 0
+```
+
+Or plan against a hypothetical/rented GPU:
+
+```bash
+vramscout Qwen/Qwen3.8-27B-FP8 --vram-gib 48 --kv-dtype fp8
+```
+
+## Precision
+
+Weight and cache precision are independent:
 
 ```text
-KV = 2 × layers × batch × context × kv_heads × head_dim × bytes_per_KV_element
+weights: auto / fp32 / fp16 / bf16 / fp8 / int8 / int4 / nvfp4
+KV:      auto / fp32 / fp16 / bf16 / fp8
 ```
 
-The leading `2` is for **K + V**. This means GQA/MQA models can use much less KV memory than ordinary MHA models.
+Quantized weights do **not** imply quantized KV cache.
 
-VRAMScout then reserves memory for CUDA/runtime state, prefill scratch buffers and a safety margin. The maximum context is obtained by solving the remaining linear memory budget for the token count, then clamping it to the model-declared context limit.
+## Current architecture coverage
 
-## Why current *free* VRAM matters
+Supported now:
 
-A 32 GiB GPU does not necessarily have 32 GiB available. Another process may already be using 12 GiB. VRAMScout reads `nvidia-smi` and plans against the memory that is free **right now**.
+- standard decoder-only Transformer KV caches (Llama/Qwen/Mistral/Gemma-style families);
+- GQA / MQA / MHA;
+- Qwen3.5/Qwen3.8 `qwen3_5` hybrid stack with full attention + GatedDeltaNet linear attention;
+- native BF16/FP8/NVFP4 checkpoint byte accounting when Hub shard metadata is available;
+- conservative sliding-window fallback.
 
-Use `--vram-gib` to ignore local GPU state and plan against a hypothetical GPU budget.
+Still fail-closed / incomplete:
 
-## Precision behavior
+- DeepSeek V2/V3/V4 MLA/CSA/HCA;
+- GLM-5.x DSA/MLA-style sparse attention;
+- Mamba/Jamba/recurrent architectures;
+- engine-specific vLLM/SGLang hybrid-cache paging;
+- multi-GPU tensor/expert parallel planning;
+- exact multimodal activation memory beyond checkpoint weights.
 
-Weight dtype and KV-cache dtype are deliberately separate:
+The policy is deliberate: **unsupported modern state semantics should error rather than silently reuse the wrong Transformer formula.**
 
-- BF16 / FP16 weights: ~2 bytes per parameter;
-- FP32 weights: ~4 bytes per parameter;
-- INT8 / INT4: includes a small packing/scale overhead estimate;
-- quantized weights **do not automatically mean quantized KV cache**;
-- `--kv-dtype auto` keeps KV in BF16 for FP16/BF16/INT8/INT4 weights.
+## Validation
 
-## Model metadata
+Public reference cases are checked into the repo:
 
-For Hugging Face model IDs, VRAMScout downloads only metadata/configuration, not checkpoint weights. Parameter count is taken from Hugging Face safetensors metadata when available; otherwise a dense decoder architecture estimate is used.
+```bash
+python validation/run.py
+```
 
-Local directories containing `config.json` are also supported.
-
-## Scope and limitations
-
-VRAMScout v0.1 intentionally keeps the scope narrow:
-
-- NVIDIA auto-detection through `nvidia-smi`;
-- single-GPU inference;
-- standard decoder-only Transformer KV caches;
-- conservative full-cache accounting for sliding-window models.
-
-It **fails closed** on known non-standard cache/state architectures such as DeepSeek MLA and Mamba-style recurrent/state-space models instead of silently applying the wrong KV formula.
-
-Real peak memory varies with serving engine (Transformers, vLLM, SGLang, llama.cpp), attention backend, CUDA graphs, allocator fragmentation, quantization format and prefill strategy. The current runtime/prefill terms are therefore estimates, not guarantees.
-
-## Roadmap
-
-- [ ] measured `vramscout probe` calibration on the local host;
-- [ ] vLLM / SGLang engine-specific overhead profiles;
-- [ ] multi-GPU tensor-parallel planning;
-- [ ] native sliding-window/interleaved-local cache accounting;
-- [ ] MLA / hybrid/recurrent inference-state accounting;
-- [ ] AMD / Apple Silicon detection.
+The next validation layer will compare complete vLLM/SGLang peak memory and max-context boundaries, not only weights/raw cache math.
 
 ## Development
 
@@ -147,6 +148,18 @@ cd vramscout
 pip install -e . pytest
 pytest -q
 ```
+
+## Roadmap
+
+- [x] Qwen3.8 hybrid full-attention + linear-attention cache accounting
+- [x] native checkpoint-shard byte accounting for FP8/NVFP4
+- [x] public weight/cache validation dataset
+- [ ] vLLM / SGLang engine profiles and measured peak-memory validation
+- [ ] tensor/expert-parallel per-GPU planning
+- [ ] DeepSeek-V4 CSA/HCA + MoE
+- [ ] GLM-5.2 sparse/DSA + MoE
+- [ ] Kimi / MiniMax modern MLA/hybrid families
+- [ ] local `vramscout probe` calibration
 
 ## License
 
