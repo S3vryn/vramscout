@@ -1,0 +1,144 @@
+{
+  "snapshot_date": "2026-09-09",
+  "policy": "A model is listed as adapted when its released Hugging Face config maps to a dedicated VRAMScout memory family. Numeric accuracy is a separate claim and is only added when public serving-memory evidence exists.",
+  "models": [
+    {
+      "id": "Qwen/Qwen3.8-27B",
+      "memory_family": "qwen35_hybrid",
+      "status": "supported_and_numerically_validated",
+      "source": "https://huggingface.co/Qwen/Qwen3.8-27B"
+    },
+    {
+      "id": "Qwen/Qwen3.8-2.4T-A95B",
+      "memory_family": "qwen35_hybrid",
+      "status": "supported",
+      "source": "https://huggingface.co/Qwen/Qwen3.8-2.4T-A95B"
+    },
+    {
+      "id": "Qwen/Qwen3.8-Flash-Next",
+      "memory_family": "qwen4_exp_hybrid",
+      "status": "supported",
+      "source": "https://huggingface.co/Qwen/Qwen3.8-Flash-Next"
+    },
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Pro-0813",
+      "memory_family": "deepseek_v4_compressed_or_mla_indexed",
+      "status": "supported",
+      "source": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-0813"
+    },
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp",
+      "memory_family": "deepseek_v4_compressed_or_mla_indexed",
+      "status": "supported_text_state_multimodal_activations_partial",
+      "source": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-Vision-Exp"
+    },
+    {
+      "id": "zai-org/GLM-5.2",
+      "memory_family": "mla_indexshare",
+      "status": "supported_and_numerically_validated",
+      "source": "https://huggingface.co/zai-org/GLM-5.2"
+    },
+    {
+      "id": "zai-org/GLM-5.3",
+      "memory_family": "mla_indexshare",
+      "status": "supported",
+      "source": "https://huggingface.co/zai-org/GLM-5.3"
+    },
+    {
+      "id": "zai-org/GLM-5.3-Flash",
+      "memory_family": "glm53_hybrid",
+      "status": "supported_text_state_multimodal_activations_partial",
+      "source": "https://huggingface.co/zai-org/GLM-5.3-Flash"
+    },
+    {
+      "id": "moonshotai/Kimi-K2.5",
+      "memory_family": "mla",
+      "status": "supported_and_numerically_validated",
+      "source": "https://huggingface.co/moonshotai/Kimi-K2.5"
+    },
+    {
+      "id": "moonshotai/Kimi-K2.6",
+      "memory_family": "mla",
+      "status": "supported",
+      "source": "https://huggingface.co/moonshotai/Kimi-K2.6"
+    },
+    {
+      "id": "moonshotai/Kimi-K3",
+      "memory_family": "kimi_k3_hybrid",
+      "status": "supported_text_state_multimodal_activations_partial",
+      "source": "https://huggingface.co/moonshotai/Kimi-K3"
+    },
+    {
+      "id": "tencent/Hy4-preview",
+      "memory_family": "mla_indexshare",
+      "status": "supported",
+      "source": "https://huggingface.co/tencent/Hy4-preview"
+    },
+    {
+      "id": "tencent/Hy4-preview-FP8",
+      "memory_family": "mla_indexshare",
+      "status": "supported",
+      "source": "https://huggingface.co/tencent/Hy4-preview-FP8"
+    },
+    {
+      "id": "MiniMaxAI/MiniMax-M2.7",
+      "memory_family": "standard",
+      "status": "supported_and_numerically_validated",
+      "source": "https://huggingface.co/MiniMaxAI/MiniMax-M2.7"
+    },
+    {
+      "id": "MiniMaxAI/MiniMax-M3",
+      "memory_family": "standard_sparse_index",
+      "status": "supported_text_state_multimodal_activations_partial",
+      "source": "https://huggingface.co/MiniMaxAI/MiniMax-M3"
+    },
+    {
+      "id": "google/gemma-4-26B-A4B",
+      "memory_family": "gemma4_hybrid",
+      "status": "supported_text_state_multimodal_activations_partial",
+      "source": "https://huggingface.co/google/gemma-4-26B-A4B"
+    },
+    {
+      "id": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
+      "memory_family": "nemotron_mamba_hybrid",
+      "status": "supported",
+      "source": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"
+    },
+    {
+      "id": "mistralai/Mistral-Medium-3.5-128B",
+      "memory_family": "standard",
+      "status": "supported_text_state_multimodal_activations_partial",
+      "source": "https://huggingface.co/mistralai/Mistral-Medium-3.5-128B"
+    },
+    {
+      "id": "mistralai/Mistral-Small-4-119B-2603",
+      "memory_family": "mla",
+      "status": "supported",
+      "source": "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603"
+    },
+    {
+      "id": "mistralai/Mistral-Small-4-119B-2603-NVFP4",
+      "memory_family": "mla",
+      "status": "supported",
+      "source": "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603-NVFP4"
+    },
+    {
+      "id": "meituan-longcat/LongCat-2.0",
+      "memory_family": "mla_indexed",
+      "status": "supported",
+      "source": "https://huggingface.co/meituan-longcat/LongCat-2.0"
+    },
+    {
+      "id": "XiaomiMiMo/MiMo-V2.5",
+      "memory_family": "mimo_hybrid",
+      "status": "supported_text_state_multimodal_activations_partial",
+      "source": "https://huggingface.co/XiaomiMiMo/MiMo-V2.5"
+    },
+    {
+      "id": "XiaomiMiMo/MiMo-V2.5-Pro",
+      "memory_family": "mimo_hybrid",
+      "status": "supported",
+      "source": "https://huggingface.co/XiaomiMiMo/MiMo-V2.5-Pro"
+    }
+  ]
+}
