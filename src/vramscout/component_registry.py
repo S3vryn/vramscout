@@ -43,12 +43,14 @@ def _standard_sparse(p: Any) -> ComponentGraph:
     md = p.metadata
     parts = [KVCache("KV cache", p.layers, p.kv_heads, p.head_dim)]
     if md.get("sparse_layers") and md.get("index_dim") and md.get("index_heads"):
+        # MiniMax-M3 index heads shard/replicate exactly like its KV heads in vLLM.
         parts.append(
             SparseIndexer(
                 "Sparse indexer",
                 int(md["sparse_layers"]),
                 int(md["index_dim"]),
                 heads=int(md["index_heads"]),
+                tp_sharded_heads=True,
             )
         )
     return ComponentGraph(p.family, tuple(parts))
@@ -56,9 +58,19 @@ def _standard_sparse(p: Any) -> ComponentGraph:
 
 @register("mla")
 def _mla(p: Any) -> ComponentGraph:
+    # Kimi K2.x has public vLLM DCP evidence. Mistral4 uses the same latent
+    # primitive but is not silently DCP-sharded until engine evidence exists.
+    kimi = p.model_type == "kimi_k2" or p.root_model_type == "kimi_k2"
     return ComponentGraph(
         p.family,
-        (LatentCache("MLA latent cache", p.layers, int(p.metadata.get("mla_dim", 0))),),
+        (
+            LatentCache(
+                "MLA latent cache",
+                p.layers,
+                int(p.metadata.get("mla_dim", 0)),
+                dcp_sharded=kimi,
+            ),
+        ),
     )
 
 
@@ -68,7 +80,14 @@ def _mla_indexed(p: Any) -> ComponentGraph:
     parts = [LatentCache("MLA latent cache", p.layers, int(md.get("mla_dim", 0)))]
     groups = int(md.get("index_groups", 0))
     if groups and md.get("index_dim"):
-        parts.append(SparseIndexer("Sparse/DSA indexer", groups, int(md["index_dim"])))
+        parts.append(
+            SparseIndexer(
+                "Sparse/DSA indexer",
+                groups,
+                int(md["index_dim"]),
+                compression_ratio=max(1, int(md.get("indexer_ratio", 1))),
+            )
+        )
     return ComponentGraph(p.family, tuple(parts))
 
 
@@ -112,6 +131,7 @@ def _qwen4_exp(p: Any) -> ComponentGraph:
                 int(md["indexer_dim"]),
                 heads=int(md.get("indexer_kv_heads", 1)),
                 compression_ratio=max(1, int(md.get("indexer_ratio", 1))),
+                tp_sharded_heads=True,
             )
         )
     if md.get("recurrent_bytes"):
@@ -127,11 +147,13 @@ def _qwen4_exp(p: Any) -> ComponentGraph:
 @register("kimi_k3_hybrid", "glm53_hybrid")
 def _kda_mla_hybrid(p: Any) -> ComponentGraph:
     md = p.metadata
+    is_kimi = p.family == "kimi_k3_hybrid"
     parts = [
         LatentCache(
             "Sparse/MLA latent cache",
             int(md.get("full_layers", 0)),
             int(md.get("mla_dim", 0)),
+            dcp_sharded=is_kimi,
         )
     ]
     if md.get("index_groups") and md.get("index_dim"):
@@ -140,6 +162,8 @@ def _kda_mla_hybrid(p: Any) -> ComponentGraph:
                 "Sparse indexer",
                 int(md["index_groups"]),
                 int(md["index_dim"]),
+                compression_ratio=max(1, int(md.get("indexer_ratio", 1))),
+                dcp_sharded=is_kimi,
             )
         )
     if md.get("recurrent_bytes"):
@@ -184,6 +208,9 @@ def _deepseek_v4(p: Any) -> ComponentGraph:
                     c4,
                     int(md["index_dim"]),
                     compression_ratio=4,
+                    # vLLM FP8/FP4 DeepSeek index pages carry scale metadata:
+                    # 128 FP8 -> 132 bytes, 128 FP4 -> 68 bytes.
+                    quant_scale_bytes=4,
                 )
             )
     if c128:
@@ -207,14 +234,14 @@ def _gemma4(p: Any) -> ComponentGraph:
         (
             KVCache(
                 "Gemma4 sliding KV",
-                int(md.get("sliding_layers", 0)),
+                int(md.get("sliding_alloc_layers", md.get("sliding_layers", 0))),
                 p.kv_heads,
                 p.head_dim,
                 window=int(md.get("sliding_window", 0)) or None,
             ),
             KVCache(
                 "Gemma4 global KV",
-                int(md.get("full_layers", 0)),
+                int(md.get("full_alloc_layers", md.get("full_layers", 0))),
                 int(md.get("global_kv_heads", p.kv_heads)),
                 int(md.get("global_head_dim", p.head_dim)),
             ),
@@ -233,12 +260,14 @@ def _mimo(p: Any) -> ComponentGraph:
                 int(md.get("full_layers", 0)),
                 p.kv_heads,
                 p.head_dim,
+                value_head_dim=int(md.get("v_head_dim", p.head_dim)),
             ),
             KVCache(
                 "MiMo chunk/SWA KV",
                 int(md.get("sliding_layers", 0)),
                 int(md.get("swa_kv_heads", p.kv_heads)),
                 int(md.get("swa_head_dim", p.head_dim)),
+                value_head_dim=int(md.get("swa_v_head_dim", md.get("swa_head_dim", p.head_dim))),
                 window=int(md.get("sliding_window", 128)),
             ),
         ),
