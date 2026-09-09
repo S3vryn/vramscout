@@ -8,7 +8,8 @@ from rich.console import Console
 from rich.table import Table
 
 from .gpu import GPUDetectionError
-from .modern_core import ModernInspectionError, plan_modern
+from .modern_core import ModernInspectionError
+from .modern_v06 import plan_modern
 
 
 CURRENT_FAMILIES = [
