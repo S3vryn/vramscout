@@ -10,37 +10,44 @@ from .gpu import get_gpu_group
 from . import modern_core as base
 
 
-def _selected_checkpoint_size_bytes(model_ref: str, revision: str | None) -> int | None:
-    """Return one logical safetensors checkpoint, avoiding duplicate export formats.
+def _selected_hub_metadata(model_ref: str, revision: str | None) -> tuple[int | None, int | None]:
+    """Return parameter count and one logical safetensors checkpoint size.
 
-    Some current repos publish both ``model-*.safetensors`` and
-    ``consolidated-*.safetensors`` for the same weights. Summing every
-    safetensors file would double-count residency.
+    Some repos publish both ``model-*`` and ``consolidated-*`` exports of the
+    same weights. Only one logical shard set is counted.
     """
     if Path(model_ref).expanduser().exists():
-        return None
+        return None, None
     try:
         info = HfApi().model_info(model_ref, revision=revision, files_metadata=True)
     except Exception:
-        return None
+        return None, None
+
+    params = None
+    st = getattr(info, "safetensors", None)
+    if st is not None:
+        params = getattr(st, "total", None)
+        if params is None and isinstance(st, dict):
+            params = st.get("total")
+    if not isinstance(params, int) or params <= 0:
+        params = None
+
     files: list[tuple[str, int]] = []
     for f in getattr(info, "siblings", None) or []:
         name, size = getattr(f, "rfilename", None), getattr(f, "size", None)
         if isinstance(name, str) and name.endswith(".safetensors") and isinstance(size, int) and size > 0:
             files.append((name, size))
-    if not files:
-        return None
 
     def pick(pred) -> int | None:
         chosen = [size for name, size in files if pred(name)]
         return sum(chosen) if chosen else None
 
-    # Standard HF shards are preferred; consolidated exports are usually aliases.
-    return (
+    checkpoint = (
         pick(lambda n: Path(n).name == "model.safetensors" or Path(n).name.startswith("model-"))
         or pick(lambda n: Path(n).name == "consolidated.safetensors" or Path(n).name.startswith("consolidated-"))
-        or sum(size for _, size in files)
+        or (sum(size for _, size in files) if files else None)
     )
+    return params, checkpoint
 
 
 def _better_quantization(model_ref: str, root: dict[str, Any], text: dict[str, Any]) -> str | None:
@@ -73,23 +80,69 @@ def _better_quantization(model_ref: str, root: dict[str, Any], text: dict[str, A
     return base._quantization(root) or base._quantization(text)
 
 
+def _int(cfg: dict[str, Any], *keys: str) -> int | None:
+    return base._first_int(cfg, *keys)
+
+
 def inspect_modern_model(model_ref: str, revision: str | None = None) -> base.ModernProfile:
-    p = base.inspect_modern_model(model_ref, revision)
     root = base._load_config(model_ref, revision)
     text = root.get("text_config") if isinstance(root.get("text_config"), dict) else root
-    selected = _selected_checkpoint_size_bytes(model_ref, revision)
-    if selected:
-        p.checkpoint_size_bytes = selected
-    p.quantization = _better_quantization(model_ref, root, text)
+    rt = str(root.get("model_type") or "unknown").lower()
+    mt = str(text.get("model_type") or rt).lower()
 
-    # Kimi K3 exposes decomposed q/k dimensions; avoid deriving an invalid
-    # head size from hidden_size / q_heads when that ratio is non-integral.
-    if p.family == "kimi_k3_hybrid":
-        nope = base._first_int(text, "qk_nope_head_dim")
-        rope = base._first_int(text, "qk_rope_head_dim")
+    layers = _int(text, "num_hidden_layers", "num_layers", "n_layer")
+    hidden = _int(text, "hidden_size", "d_model", "n_embd")
+    qh = _int(text, "num_attention_heads", "n_head", "num_heads")
+    kvh = _int(text, "num_key_value_heads", "num_kv_heads", "n_kv_heads") or qh
+    hd = _int(text, "head_dim", "qk_head_dim", "attention_head_dim")
+    if hd is None:
+        nope, rope = _int(text, "qk_nope_head_dim"), _int(text, "qk_rope_head_dim")
         if nope and rope:
-            p.head_dim = nope + rope
-    return p
+            hd = nope + rope
+    if hd is None and hidden and qh and hidden % qh == 0:
+        hd = hidden // qh
+    if not all([layers, hidden, qh, kvh, hd]):
+        missing = [name for name, value in {
+            "layers": layers, "hidden_size": hidden, "q_heads": qh,
+            "kv_heads": kvh, "head_dim": hd,
+        }.items() if not value]
+        raise base.ModernInspectionError(f"Unsupported/incomplete decoder config for {model_ref}; missing {', '.join(missing)}")
+
+    params, checkpoint = _selected_hub_metadata(model_ref, revision)
+    if not params:
+        params = base._dense_param_fallback(text)
+
+    family, md, notes = base._family(root, text)
+    max_ctx = (
+        _int(text, "max_position_embeddings", "max_sequence_length", "seq_length", "n_positions", "model_max_length")
+        or _int(root, "max_position_embeddings", "max_sequence_length", "model_max_length")
+    )
+    dtype = base._dtype(text.get("dtype", text.get("torch_dtype", root.get("dtype", root.get("torch_dtype")))))
+    quant = _better_quantization(model_ref, root, text)
+    ref_lower = model_ref.lower()
+    has_vision = isinstance(root.get("vision_config"), dict) or isinstance(text.get("vision_config"), dict) or "vision" in ref_lower or rt.endswith("_vl") or rt in {"gemma4", "minimax_m3_vl", "qwen4_exp", "glm5_next"}
+    has_audio = isinstance(root.get("audio_config"), dict) or isinstance(text.get("audio_config"), dict) or "audio" in ref_lower
+
+    return base.ModernProfile(
+        model_id=model_ref,
+        root_model_type=rt,
+        model_type=mt,
+        family=family,
+        num_params=params,
+        checkpoint_size_bytes=checkpoint,
+        layers=layers,
+        hidden_size=hidden,
+        q_heads=qh,
+        kv_heads=kvh,
+        head_dim=hd,
+        max_context=max_ctx,
+        dtype=dtype,
+        quantization=quant,
+        has_vision=has_vision,
+        has_audio=has_audio,
+        metadata=md,
+        notes=notes,
+    )
 
 
 def plan_modern(
@@ -162,7 +215,7 @@ def plan_modern(
     fits = budget.startup_ok and total <= budget.memory_budget_gib and (p.max_context is None or ctx <= p.max_context)
     notes = list(p.notes)
     if p.has_vision:
-        notes.append("Vision checkpoint weights are included; request-dependent image token/activation memory is not modeled exactly yet.")
+        notes.append("Vision checkpoint weights are included; request-dependent image/video token and activation memory is not modeled exactly yet.")
     if p.has_audio:
         notes.append("Audio checkpoint weights are included; request-dependent audio encoder activation memory is not modeled exactly yet.")
     if p.family == "nemotron_mamba_hybrid":
