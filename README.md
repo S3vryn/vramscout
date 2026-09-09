@@ -1,5 +1,7 @@
 # VRAMScout
 
+**English** | [中文](README_CN.md)
+
 **Can this current open-weight model fit on my GPU(s) — where does the VRAM go, and how much context can I afford?**
 
 VRAMScout is a CLI for **LLM deployment memory preflight**. It reads Hugging Face metadata without downloading checkpoint weights, inspects the GPU memory that is actually free, and estimates per-rank weights, cache/state, runtime workspace, prefill scratch, safety headroom, and the **maximum context length that fits**.
