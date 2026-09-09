@@ -1,21 +1,17 @@
 from __future__ import annotations
 
+from .calibration import public_cache_calibration
 from .component_registry import build_component_graph
 from .components import EvalContext
 from .engine import resolve_engine_budget
 from .gpu import get_gpu_group
+from .profile_fixups import apply_profile_fixups
 from . import modern_core as base
 from .modern_v06 import inspect_modern_model
 
 
 def _runtime_gib(weight_rank_gib: float, family: str) -> float:
-    """Conservative static runtime estimate.
-
-    Architecture/cache state is handled by components. CUDA graphs, allocator
-    fragmentation and backend workspaces are intentionally kept separate here.
-    Public log calibration lives in validation/ rather than being silently baked
-    into the architecture math.
-    """
+    """Conservative static runtime estimate kept separate from cache math."""
     family_floor = {
         "qwen4_exp_hybrid": 1.5,
         "deepseek_v4_compressed": 1.5,
@@ -30,6 +26,14 @@ def _runtime_gib(weight_rank_gib: float, family: str) -> float:
 def _prefill_gib(profile, context: int, batch: int, dtype: str, chunk: int) -> float:
     bytes_ = 4 if dtype == "fp32" else 2
     return min(context, chunk) * batch * profile.hidden_size * bytes_ * 5 / base.GIB
+
+
+def _dcp_supported(profile) -> bool:
+    if profile.family == "kimi_k3_hybrid":
+        return True
+    return profile.family == "mla" and (
+        profile.model_type == "kimi_k2" or profile.root_model_type == "kimi_k2"
+    )
 
 
 def plan_modern(
@@ -49,13 +53,22 @@ def plan_modern(
     prefill_chunk: int = 8192,
     engine: str = "generic",
     gpu_memory_utilization: float | None = None,
+    calibration: str = "public",
 ) -> base.ModernPlan:
     if tp < 1 or dcp < 1 or dcp > tp or tp % dcp != 0:
         raise ValueError("Require tp >= 1 and dcp to divide tp.")
     if batch_size < 1 or prefill_chunk < 1:
         raise ValueError("batch-size and prefill-chunk must be >= 1")
+    if calibration not in {"none", "public"}:
+        raise ValueError("calibration must be one of: none, public")
 
     profile = inspect_modern_model(model_ref, revision)
+    profile = apply_profile_fixups(profile, model_ref, revision)
+    if dcp > 1 and not _dcp_supported(profile):
+        raise ValueError(
+            f"DCP={dcp} is not publicly validated for {profile.family}; "
+            "VRAMScout fails closed instead of silently dividing its cache."
+        )
     graph = build_component_graph(profile)
     gpu = get_gpu_group(start_index=gpu_index, count=tp, vram_gib=vram_gib)
     budget = resolve_engine_budget(gpu, engine=engine, gpu_memory_utilization=gpu_memory_utilization)
@@ -70,11 +83,24 @@ def plan_modern(
     ctx = context or min(8192, profile.max_context or 8192)
     if ctx < 1:
         raise ValueError("context must be >= 1")
-    reserve = reserve_gib if reserve_gib is not None else max(1.0, 0.05 * gpu.total_gib)
+
+    # Generic planning uses an explicit safety reserve. vLLM already places
+    # gpu_memory_utilization outside its own allocation budget; subtracting an
+    # additional default 5% here would double-count headroom. Users can still
+    # request an inner reserve explicitly with --reserve-gib.
+    if reserve_gib is None:
+        reserve = 0.0 if engine == "vllm" else max(1.0, 0.05 * gpu.total_gib)
+    else:
+        reserve = reserve_gib
     if reserve < 0:
         raise ValueError("reserve-gib cannot be negative")
 
     weights = base._weight_gib(profile, wd, tp)
+    cache_cal = (
+        public_cache_calibration(engine, profile.family, kd)
+        if calibration == "public"
+        else None
+    )
 
     def breakdown(c: int) -> tuple[dict[str, float], float]:
         env = EvalContext(
@@ -85,8 +111,14 @@ def plan_modern(
             tp=tp,
             dcp=dcp,
         )
+        state_parts = graph.parts_gib(env)
         parts = {"Model weights / rank": weights}
-        parts.update(graph.parts_gib(env))
+        parts.update(state_parts)
+        if cache_cal is not None and cache_cal.factor != 1.0:
+            raw_state = sum(state_parts.values())
+            overhead = raw_state * (cache_cal.factor - 1.0)
+            if overhead > 0:
+                parts[f"{engine} cache-layout calibration"] = overhead
         parts["CUDA / runtime"] = _runtime_gib(weights, profile.family)
         parts["Prefill scratch"] = _prefill_gib(profile, c, batch_size, wd, prefill_chunk)
         parts["Safety reserve"] = reserve
@@ -118,6 +150,15 @@ def plan_modern(
     notes.append(
         f"Cache/state is composed from {len(graph.components)} reusable memory component(s), not a model-name-specific monolithic formula."
     )
+    if cache_cal is not None:
+        notes.append(
+            f"Applied public {engine} cache-layout calibration ×{cache_cal.factor:.3f} "
+            f"({cache_cal.evidence_count} receipt(s)): {cache_cal.source}"
+        )
+    if engine == "vllm" and reserve_gib is None:
+        notes.append(
+            "Default inner safety reserve is 0 in vLLM mode because gpu_memory_utilization already leaves memory outside the engine budget."
+        )
     if profile.has_vision:
         notes.append(
             "Vision checkpoint residency is included; request-dependent image-token and encoder activation memory is not yet modeled exactly."
@@ -127,7 +168,7 @@ def plan_modern(
             "Audio checkpoint residency is included; request-dependent audio encoder activation memory is not yet modeled exactly."
         )
     notes.append(
-        "Architecture state is deterministic from config; CUDA graphs/workspaces remain a static estimate and are tracked separately by public-log validation."
+        "Architecture state is config-derived; public calibration only represents observed engine page/layout overhead. CUDA graphs/workspaces remain a separate static estimate."
     )
 
     return base.ModernPlan(
