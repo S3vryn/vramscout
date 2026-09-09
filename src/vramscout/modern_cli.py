@@ -8,8 +8,9 @@ from rich.console import Console
 from rich.table import Table
 
 from .gpu import GPUDetectionError
+from .log_parser import parse_log_file
 from .modern_core import ModernInspectionError
-from .modern_v06 import plan_modern
+from .modern_v07 import plan_modern
 
 
 CURRENT_FAMILIES = [
@@ -52,13 +53,44 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--dcp", type=_positive_int, default=1, help="decode-context-parallel ranks; must divide TP")
     p.add_argument("--engine", choices=["generic", "vllm"], default="generic")
     p.add_argument("--gpu-memory-utilization", type=float, default=None)
+    p.add_argument("--calibration", choices=["public", "none"], default="public", help="apply audited engine-layout calibration when an exact profile exists")
     p.add_argument("--prefill-chunk", type=_positive_int, default=8192)
     p.add_argument("--gpu-index", type=int, default=0)
     p.add_argument("--vram-gib", type=float, default=None, help="manual VRAM budget per GPU")
     p.add_argument("--reserve-gib", type=float, default=None)
     p.add_argument("--json", action="store_true")
     p.add_argument("--list-supported", action="store_true")
+    p.add_argument("--parse-log", metavar="PATH", help="parse a vLLM/SGLang startup log into a normalized memory receipt")
     return p
+
+
+def _human_receipt(receipt) -> None:
+    c = Console()
+    t = Table(title=f"{receipt.engine} startup memory receipt", show_header=False)
+    t.add_column("Field", style="bold")
+    t.add_column("Value", justify="right")
+    fields = [
+        ("Model loading", receipt.model_loading_gib, "GiB"),
+        ("Available KV", receipt.available_kv_gib, "GiB"),
+        ("Active KV", receipt.active_kv_gib, "GiB"),
+        ("KV cache size", receipt.kv_tokens, "tokens"),
+        ("Reference context", receipt.context_tokens, "tokens"),
+        ("Max concurrency", receipt.max_concurrency, "x"),
+        ("CUDA graphs", receipt.cuda_graph_gib, "GiB"),
+        ("Peak activation", receipt.peak_activation_gib, "GiB"),
+        ("Consumed memory", receipt.consumed_memory_gib, "GiB"),
+    ]
+    for label, value, unit in fields:
+        if value is None:
+            continue
+        if unit == "tokens":
+            shown = f"{int(value):,} {unit}"
+        elif unit == "x":
+            shown = f"{float(value):.2f}x"
+        else:
+            shown = f"{float(value):.2f} {unit}"
+        t.add_row(label, shown)
+    c.print(t)
 
 
 def _human(r) -> None:
@@ -120,14 +152,26 @@ def _human(r) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
     if args.list_supported:
         Console().print("[bold]Current architecture coverage[/bold]")
         for x in CURRENT_FAMILIES:
             Console().print(f"  • {x}")
         return 0
+    if args.parse_log:
+        try:
+            receipt = parse_log_file(args.parse_log)
+        except (OSError, ValueError) as exc:
+            Console(stderr=True).print(f"[bold red]Error:[/bold red] {exc}")
+            return 1
+        if args.json:
+            print(json.dumps(receipt.to_dict(), indent=2, ensure_ascii=False))
+        else:
+            _human_receipt(receipt)
+        return 0
     if not args.model:
-        _parser().error("model is required unless --list-supported is used")
+        parser.error("model is required unless --list-supported or --parse-log is used")
 
     try:
         result = plan_modern(
@@ -146,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
             prefill_chunk=args.prefill_chunk,
             engine=args.engine,
             gpu_memory_utilization=args.gpu_memory_utilization,
+            calibration=args.calibration,
         )
     except (GPUDetectionError, ModernInspectionError, ValueError) as exc:
         if args.json:

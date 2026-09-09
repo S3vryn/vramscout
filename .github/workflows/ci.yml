@@ -19,3 +19,5 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -e . pytest
       - run: pytest -q
+      - run: python validation/predicted_vs_actual.py > /tmp/vramscout-validation.txt
+      - run: git diff --exit-code -- validation/PREDICTED_VS_ACTUAL.md

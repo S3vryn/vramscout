@@ -1,0 +1,164 @@
+{
+  "snapshot_date": "2026-09-09",
+  "scope": "Public vLLM/SGLang deployment receipts used to validate cache/state memory. Exact numeric rows require a hard memory/tokens receipt; recipe-only evidence is kept separate.",
+  "exact_cache_receipts": [
+    {
+      "id": "qwen38_flash_next_vllm_tp2_bf16",
+      "model": "Qwen/Qwen3.8-Flash-Next",
+      "engine": "vllm",
+      "engine_version": "public issue build, 2026-08-31",
+      "hardware": "2-rank TP deployment",
+      "tp": 2,
+      "dcp": 1,
+      "kv_dtype": "bf16",
+      "metric": "KiB/logical-token",
+      "raw_predicted": 12.75,
+      "calibrated_predicted": 13.11975,
+      "actual": 13.11906963443115,
+      "actual_receipt": "9.45 GiB / 755,316 logical cache tokens",
+      "calibration": "vLLM qwen4_exp_hybrid BF16 layout factor 1.029",
+      "source": "https://github.com/vllm-project/vllm/issues/54559"
+    },
+    {
+      "id": "kimi_k3_vllm_tp8_bf16",
+      "model": "moonshotai/Kimi-K3",
+      "engine": "vllm",
+      "engine_version": "v0.1.dev19262+gb6bbf29dd.d20260727",
+      "hardware": "8x NVIDIA B300",
+      "tp": 8,
+      "dcp": 1,
+      "kv_dtype": "bf16",
+      "metric": "KiB/logical-token",
+      "raw_predicted": 27.0,
+      "calibrated_predicted": 27.0,
+      "actual": 27.133817473600587,
+      "actual_receipt": "55.83 GiB / 2,157,529 logical cache tokens",
+      "calibration": "none",
+      "source": "https://github.com/vllm-project/vllm/issues/50147"
+    },
+    {
+      "id": "glm53_flash_vllm_nvfp4_bf16_cache",
+      "model": "zai-org/GLM-5.3-Flash",
+      "engine": "vllm",
+      "engine_version": "community vLLM Spark deployment, 2026-08",
+      "hardware": "2x DGX Spark / GB10",
+      "tp": 2,
+      "dcp": 1,
+      "kv_dtype": "bf16",
+      "metric": "KiB/logical-token",
+      "raw_predicted": 11.6875,
+      "calibrated_predicted": 12.38875,
+      "actual": 12.499936068335257,
+      "actual_receipt": "7.19 GiB / 603,144 logical cache tokens",
+      "calibration": "vLLM glm53_hybrid BF16 layout factor 1.06",
+      "source": "https://github.com/tonyd2wild/GLM-5.3-Flash-NVFP4-2x-DGX-Spark/blob/main/docs/DEPLOY-REPORT.md"
+    },
+    {
+      "id": "nemotron35_vllm_fp8",
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
+      "engine": "vllm",
+      "engine_version": "0.27.1",
+      "hardware": "1x DGX Spark / GB10",
+      "tp": 1,
+      "dcp": 1,
+      "kv_dtype": "fp8",
+      "metric": "KiB/logical-token",
+      "raw_predicted": 3.0,
+      "calibrated_predicted": 3.237,
+      "actual": 3.235995203959326,
+      "actual_receipt": "61.07 GiB / 19,788,823 logical cache tokens",
+      "calibration": "vLLM nemotron_mamba_hybrid FP8 layout factor 1.079",
+      "source": "https://github.com/sojufx/Nemotron-3.5-Lightning-30B-A3B-NVFP4-DGX-Spark-Recipe/blob/main/results/1m-vllm0271-dspark-k3.md"
+    },
+    {
+      "id": "mistral_small4_sglang_tp4_bf16",
+      "model": "mistralai/Mistral-Small-4-119B-2603",
+      "engine": "sglang",
+      "engine_version": "0.5.10rc0",
+      "hardware": "4x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "tp": 4,
+      "dcp": 1,
+      "kv_dtype": "bf16",
+      "metric": "KiB/logical-token",
+      "raw_predicted": 22.5,
+      "calibrated_predicted": 22.5,
+      "actual": 22.50034567024615,
+      "actual_receipt": "52.22 GB/GiB-reported pool / 2,433,591 logical cache tokens",
+      "calibration": "none",
+      "note": "The public run later fails during CUDA graph capture because of a loader bug, but the SGLang allocator receipt is complete and is used only for cache-layout validation.",
+      "source": "https://github.com/sgl-project/sglang/issues/21611"
+    },
+    {
+      "id": "minimax_m3_vllm_tp8_bf16",
+      "model": "nvidia/MiniMax-M3-NVFP4",
+      "engine": "vllm",
+      "engine_version": "0.26.1rc1.dev457+gc810e5ee9",
+      "hardware": "8x NVIDIA B200 SXM",
+      "tp": 8,
+      "dcp": 1,
+      "kv_dtype": "bf16",
+      "metric": "KiB/logical-token",
+      "raw_predicted": 44.25,
+      "calibrated_predicted": 44.25,
+      "actual": 44.25040416166466,
+      "actual_receipt": "107.99 GiB / 2,558,976 logical cache tokens",
+      "calibration": "none",
+      "source": "https://github.com/vllm-project/vllm/issues/51494"
+    }
+  ],
+  "version_sensitive_receipts": [
+    {
+      "id": "gemma4_vllm_fp8_hybrid_allocator",
+      "model": "google/gemma-4-26B-A4B-it",
+      "engine": "vllm",
+      "kv_dtype": "fp8",
+      "metric": "GiB/per-131072-token-sequence",
+      "raw_predicted": 1.34765625,
+      "actual": 2.1306572215663127,
+      "raw_error_pct": 36.74926983284079,
+      "actual_receipt": "54.14 GiB pool / 25.41x concurrency at 131,072 tokens",
+      "status": "unresolved_version_sensitive_hybrid_allocator",
+      "note": "Gemma4 hybrid page grouping/padding has changed across vLLM releases. This row is intentionally not auto-calibrated from one build.",
+      "source": "https://github.com/eugr/spark-vllm-docker/issues/217",
+      "official_recipe": "https://github.com/vllm-project/recipes/blob/main/Google/Gemma4.md"
+    }
+  ],
+  "deployment_evidence_without_exact_comparable_cache_receipt": [
+    {
+      "model": "Qwen/Qwen3.8-2.4T-A95B",
+      "engines": ["vllm", "sglang"],
+      "evidence": "Official Dynamo deployment matrices validate FP8 weights/KV at TP16 on GB300/GB200, with 262,144-278,528 context depending on engine/hardware.",
+      "source": "https://github.com/ai-dynamo/dynamo/blob/main/recipes/qwen3.8-2.4t-a95b/README.md"
+    },
+    {
+      "model": "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp",
+      "engines": ["vllm", "sglang"],
+      "evidence": "Public/official recipes validate the multimodal serving path. Available community receipts use custom NVFP4 DeepSeek MLA KV, which is not apples-to-apples with the standard cache dtypes in the CLI.",
+      "source": "https://github.com/sgl-project/sglang/blob/main/docs/cookbook/autoregressive/DeepSeek/DeepSeek-V4.mdx"
+    },
+    {
+      "model": "tencent/Hy4-preview-FP8",
+      "engines": ["vllm", "sglang"],
+      "evidence": "Tencent publishes official vLLM and SGLang images/commands; no clean hard memory/token receipt was found in the audited public deployment docs at snapshot time.",
+      "source": "https://github.com/Tencent-Hunyuan/Hy4-preview"
+    },
+    {
+      "model": "mistralai/Mistral-Medium-3.5-128B",
+      "engines": ["vllm", "sglang"],
+      "evidence": "Public SGLang issue confirms TP2 deployment on B200 and reports TP1 OOM, but does not provide an allocator KV GiB/token receipt suitable for cache arithmetic validation.",
+      "source": "https://github.com/sgl-project/sglang/issues/25160"
+    },
+    {
+      "model": "meituan-longcat/LongCat-2.0-FP8",
+      "engines": ["sglang"],
+      "evidence": "Public TP32/EP32 H200 deployment completes a 1,048,576-token request; FP8 KV pool reaches about 1.23M tokens while BF16 reaches about 752K.",
+      "source": "https://github.com/whn09/LongCat-2.0-SGLang-EFA/blob/main/LONGCAT2_1M_CONTEXT.md"
+    },
+    {
+      "model": "XiaomiMiMo/MiMo-V2.5 / MiMo-V2.5-Pro",
+      "engines": ["sglang"],
+      "evidence": "Official SGLang deployment matrix validates the model-specific TP/DP-attention topology across H200/H100/B200/GB300. Public receipts found were not precise/comparable enough for an exact cache row.",
+      "source": "https://github.com/sgl-project/sglang/blob/main/docs/src/snippets/autoregressive/mimo-v25-deployment.jsx"
+    }
+  ]
+}
