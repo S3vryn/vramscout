@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vramscout"
 version = "0.7.0"
-description = "Composable and engine-calibrated GPU VRAM planner for current open-weight LLMs."
+description = "Validated GPU VRAM and max-context planner for modern open-weight LLM deployment."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Junchi Ma" }]
-keywords = ["llm", "gpu", "vram", "huggingface", "kv-cache", "inference", "vllm", "sglang"]
+keywords = ["llm", "gpu", "vram", "gpu-memory", "huggingface", "kv-cache", "context-length", "inference", "llm-inference", "deployment", "cuda", "vllm", "sglang"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
