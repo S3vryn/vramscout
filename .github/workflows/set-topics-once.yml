@@ -1,0 +1,31 @@
+name: Set repository topics once
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/set-topics-once.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  topics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set repository topics
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PUT \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/topics" \
+            -f 'names[]=llm' \
+            -f 'names[]=gpu' \
+            -f 'names[]=vram' \
+            -f 'names[]=vllm' \
+            -f 'names[]=sglang' \
+            -f 'names[]=huggingface' \
+            -f 'names[]=kv-cache' \
+            -f 'names[]=context-length' \
+            -f 'names[]=llm-inference' \
+            -f 'names[]=gpu-memory'
