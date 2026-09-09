@@ -25,6 +25,7 @@ class EvalContext:
 
 
 def tp_kv_heads(kv_heads: int, tp: int) -> int:
+    """Per-rank KV/index head count using vLLM-style replication rules."""
     if tp <= 1:
         return kv_heads
     if kv_heads % tp == 0:
@@ -42,10 +43,17 @@ class MemoryComponent(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class KVCache:
+    """Ordinary K/V state, optionally bounded by a local/sliding window.
+
+    ``value_head_dim`` is separate because current models such as MiMo-V2.5
+    store asymmetric K and V head widths (K=192, V=128).
+    """
+
     name: str
     layers: int
     kv_heads: int
     head_dim: int
+    value_head_dim: int | None = None
     window: int | None = None
     tp_sharded: bool = True
     dcp_sharded: bool = False
@@ -54,17 +62,24 @@ class KVCache:
         tokens = min(env.context, self.window) if self.window else env.context
         heads = tp_kv_heads(self.kv_heads, env.tp) if self.tp_sharded else self.kv_heads
         divisor = env.dcp if self.dcp_sharded else 1
-        elements = 2 * self.layers * tokens * heads * self.head_dim * env.batch
+        vdim = self.head_dim if self.value_head_dim is None else self.value_head_dim
+        elements = self.layers * tokens * heads * (self.head_dim + vdim) * env.batch
         return elements * env.kv_bytes / GIB / divisor
 
 
 @dataclass(frozen=True, slots=True)
 class LatentCache:
+    """MLA/compressed latent state.
+
+    DCP is deliberately opt-in. Pure tensor parallelism does not automatically
+    divide a shared latent cache, and not every engine/family supports DCP.
+    """
+
     name: str
     layers: int
     latent_dim: int
     compression_ratio: int = 1
-    dcp_sharded: bool = True
+    dcp_sharded: bool = False
     scale_bytes_per_entry: float = 0.0
 
     def gib(self, env: EvalContext) -> float:
@@ -77,19 +92,29 @@ class LatentCache:
 
 @dataclass(frozen=True, slots=True)
 class SparseIndexer:
+    """Persistent sparse-attention index key state."""
+
     name: str
     layers: int
     dim: int
     heads: int = 1
     compression_ratio: int = 1
-    dcp_sharded: bool = True
+    tp_sharded_heads: bool = False
+    dcp_sharded: bool = False
     scale_bytes_per_entry: float = 0.0
+    quant_scale_bytes: float = 0.0
 
     def gib(self, env: EvalContext) -> float:
         ratio = max(1, self.compression_ratio)
         entries = env.context // ratio
         divisor = env.dcp if self.dcp_sharded else 1
-        per_entry = self.dim * self.heads * env.indexer_bytes + self.scale_bytes_per_entry
+        heads = tp_kv_heads(self.heads, env.tp) if self.tp_sharded_heads else self.heads
+        scale_bytes = self.scale_bytes_per_entry
+        # DeepSeek-family FP8/FP4 index pages store small scale metadata next
+        # to each packed vector; BF16/FP16 do not.
+        if env.indexer_bytes <= 1.0:
+            scale_bytes += self.quant_scale_bytes
+        per_entry = self.dim * heads * env.indexer_bytes + scale_bytes
         return self.layers * entries * per_entry * env.batch / GIB / divisor
 
 
